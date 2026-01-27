@@ -14,21 +14,33 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = 'fontan_ultra_fixed_v7'
 
 # --- НАСТРОЙКА NEON TECH (POSTGRESQL) ---
-# 1. Сначала пытаемся взять URL из переменных окружения (для продакшена)
-# 2. Если нет, используем заглушку (СЮДА ВСТАВЬ СВОЮ СТРОКУ ИЗ NEON ДЛЯ ЛОКАЛЬНОГО ТЕСТА)
+# 1. Сначала пытаемся взять URL из переменных окружения (для Render)
 NEON_DB_URL = os.environ.get('DATABASE_URL')
 
+# 2. Если переменной нет (локальный запуск), используем твою строку
 if not NEON_DB_URL:
-    # ВСТАВЬ СЮДА СВОЮ СТРОКУ, например: "postgres://user:pass@ep-xyz.neon.tech/neondb?sslmode=require"
     NEON_DB_URL = 'postgresql://neondb_owner:npg_pIZeE3uY7XLF@ep-shy-field-ahelwpwv-pooler.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require' 
 
-# Исправление для SQLAlchemy (Neon выдает postgres://, а библиотека требует postgresql://)
-if NEON_DB_URL and NEON_DB_URL.startswith("postgres://"):
-    NEON_DB_URL = NEON_DB_URL.replace("postgres://", "postgresql://", 1)
+# Исправление протокола и принудительный SSL для SQLAlchemy
+if NEON_DB_URL:
+    if NEON_DB_URL.startswith("postgres://"):
+        NEON_DB_URL = NEON_DB_URL.replace("postgres://", "postgresql://", 1)
+    
+    # Гарантируем, что SSL включен (важно для Neon!)
+    if "?" not in NEON_DB_URL:
+        NEON_DB_URL += "?sslmode=require"
+    elif "sslmode=" not in NEON_DB_URL:
+        NEON_DB_URL += "&sslmode=require"
 
 app.config['SQLALCHEMY_DATABASE_URI'] = NEON_DB_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['MAX_CONTENT_LENGTH'] = 32 * 1024 * 1024  # Увеличили до 32 МБ
+app.config['MAX_CONTENT_LENGTH'] = 32 * 1024 * 1024  # 32 МБ
+
+# Настройка пула соединений (ВАЖНО для устранения ошибки SSL connection closed)
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    "pool_pre_ping": True,
+    "pool_recycle": 300,
+}
 
 UPLOAD_FOLDER = 'uploads'
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'mp4', 'webm', 'mp3', 'wav', 'ogg'}
@@ -49,13 +61,14 @@ def allowed_file(filename):
 
 # --- БАЗА ДАННЫХ ---
 
+# ВАЖНО: Исправлены ForeignKey на 'users.id' и 'groups.id'
 group_members = db.Table('group_members',
-    db.Column('user_id', db.Integer, db.ForeignKey('user.id'), primary_key=True),
-    db.Column('group_id', db.Integer, db.ForeignKey('group.id'), primary_key=True)
+    db.Column('user_id', db.Integer, db.ForeignKey('users.id'), primary_key=True),
+    db.Column('group_id', db.Integer, db.ForeignKey('groups.id'), primary_key=True)
 )
 
 class User(UserMixin, db.Model):
-    __tablename__ = 'users'  # <--- ДОБАВИТЬ ЭТУ СТРОКУ
+    __tablename__ = 'users'  # Явное имя таблицы (PostgreSQL не любит имя 'user')
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(150), unique=True, nullable=False)
     email = db.Column(db.String(150), unique=True, nullable=False)
@@ -68,55 +81,62 @@ class User(UserMixin, db.Model):
     groups = db.relationship('Group', secondary=group_members, backref=db.backref('members', lazy='dynamic'))
 
 class Friendship(db.Model):
+    __tablename__ = 'friendships'
     id = db.Column(db.Integer, primary_key=True)
-    sender_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    receiver_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    sender_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    receiver_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     status = db.Column(db.String(20), default='pending') 
 
 class Group(db.Model):
+    __tablename__ = 'groups'
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
-    creator_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    creator_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     avatar = db.Column(db.String(200), default=None)
 
 class Message(db.Model):
+    __tablename__ = 'messages'
     id = db.Column(db.Integer, primary_key=True)
-    sender_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    recipient_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
-    group_id = db.Column(db.Integer, db.ForeignKey('group.id'), nullable=True)
-    body = db.Column(db.Text, nullable=True) # Может быть пустым, если только голос
-    voice_filename = db.Column(db.String(200), nullable=True) # Для голосовых
+    sender_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    recipient_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    group_id = db.Column(db.Integer, db.ForeignKey('groups.id'), nullable=True)
+    body = db.Column(db.Text, nullable=True) 
+    voice_filename = db.Column(db.String(200), nullable=True)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
     
     sender = db.relationship('User', foreign_keys=[sender_id])
 
 class Like(db.Model):
+    __tablename__ = 'likes'
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    post_id = db.Column(db.Integer, db.ForeignKey('post.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    post_id = db.Column(db.Integer, db.ForeignKey('posts.id'), nullable=False)
 
-class PostView(db.Model): # Новая таблица для уникальных просмотров
+class PostView(db.Model):
+    __tablename__ = 'post_views'
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    post_id = db.Column(db.Integer, db.ForeignKey('post.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    post_id = db.Column(db.Integer, db.ForeignKey('posts.id'), nullable=False)
 
 class Comment(db.Model):
+    __tablename__ = 'comments'
     id = db.Column(db.Integer, primary_key=True)
     text = db.Column(db.String(500), nullable=True)
     voice_filename = db.Column(db.String(200), nullable=True)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    post_id = db.Column(db.Integer, db.ForeignKey('post.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    post_id = db.Column(db.Integer, db.ForeignKey('posts.id'), nullable=False)
     author = db.relationship('User', backref='comments')
 
 class Post(db.Model):
+    __tablename__ = 'posts'
     id = db.Column(db.Integer, primary_key=True)
     content = db.Column(db.Text, nullable=True)
     image_filename = db.Column(db.String(200), nullable=True)
     video_filename = db.Column(db.String(200), nullable=True)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
     views = db.Column(db.Integer, default=0)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     comments_rel = db.relationship('Comment', backref='post', cascade="all, delete-orphan", lazy=True)
     likes_rel = db.relationship('Like', backref='post', cascade="all, delete-orphan", lazy=True)
     views_rel = db.relationship('PostView', backref='post', cascade="all, delete-orphan", lazy=True)
@@ -638,7 +658,6 @@ def accept_friend(user_id):
         flash("Теперь вы друзья!", "success")
     return redirect(request.referrer)
 
-# Вот здесь была ошибка в шаблоне. Теперь endpoint 'remove_friend' совпадает с вызовом url_for
 @app.route('/remove_friend/<int:user_id>')
 @login_required
 def remove_friend(user_id):
@@ -883,8 +902,7 @@ def logout():
     logout_user()
     return redirect(url_for('login'))
 
-
-# --- СОЗДАНИЕ ТАБЛИЦ (ВСТАВИТЬ ПЕРЕД if __name__) ---
+# --- СОЗДАНИЕ ТАБЛИЦ (ДЛЯ RENDER) ---
 with app.app_context():
     db.create_all()
     print("База данных и таблицы успешно созданы!")
