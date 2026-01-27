@@ -55,6 +55,7 @@ group_members = db.Table('group_members',
 )
 
 class User(UserMixin, db.Model):
+    __tablename__ = 'users'  # <--- ДОБАВИТЬ ЭТУ СТРОКУ
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(150), unique=True, nullable=False)
     email = db.Column(db.String(150), unique=True, nullable=False)
@@ -882,7 +883,11 @@ def logout():
     logout_user()
     return redirect(url_for('login'))
 
+
+# --- СОЗДАНИЕ ТАБЛИЦ (ВСТАВИТЬ ПЕРЕД if __name__) ---
+with app.app_context():
+    db.create_all()
+    print("База данных и таблицы успешно созданы!")
+
 if __name__ == '__main__':
-    with app.app_context():
-        db.create_all()
     app.run(debug=True, port=5000)
