@@ -2,80 +2,87 @@ import os
 import uuid
 import json
 from datetime import datetime
-from flask import Flask, render_template, redirect, url_for, request, flash, send_from_directory, jsonify, abort
+# Подключаем Cloudinary
+import cloudinary
+import cloudinary.uploader
+import cloudinary.api
+
+from flask import Flask, render_template, redirect, url_for, request, flash, jsonify, abort
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import or_, and_
 import jinja2
 
-# --- НАСТРОЙКИ ---
+# --- НАСТРОЙКИ ПРИЛОЖЕНИЯ ---
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'fontan_ultra_fixed_v7'
+app.config['SECRET_KEY'] = 'fontan_ultra_admin_edition_v8'
 
-# --- НАСТРОЙКА NEON TECH (POSTGRESQL) ---
-# 1. Сначала пытаемся взять URL из переменных окружения (для Render)
+# --- НАСТРОЙКИ CLOUDINARY (ВСТАВЬ СВОИ ДАННЫЕ СЮДА) ---
+cloudinary.config(
+    cloud_name = 'daz4839e7', 
+    api_key = '371541773313745', 
+    api_secret = 'fumEMY1h-nsFKW8B5BCgix9EN-8',
+    secure = True
+)
+
+# --- НАСТРОЙКА БД (NEON / RENDER) ---
 NEON_DB_URL = os.environ.get('DATABASE_URL')
-
-# 2. Если переменной нет (локальный запуск), используем твою строку
 if not NEON_DB_URL:
-    NEON_DB_URL = 'postgresql://neondb_owner:npg_pIZeE3uY7XLF@ep-shy-field-ahelwpwv-pooler.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require' 
+    # Твоя резервная ссылка (локальная)
+    NEON_DB_URL = 'postgresql://neondb_owner:npg_pIZeE3uY7XLF@ep-shy-field-ahelwpwv-pooler.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require' 
 
-# Исправление протокола и принудительный SSL для SQLAlchemy
-if NEON_DB_URL:
-    if NEON_DB_URL.startswith("postgres://"):
-        NEON_DB_URL = NEON_DB_URL.replace("postgres://", "postgresql://", 1)
-    
-    # Гарантируем, что SSL включен (важно для Neon!)
-    if "?" not in NEON_DB_URL:
-        NEON_DB_URL += "?sslmode=require"
-    elif "sslmode=" not in NEON_DB_URL:
-        NEON_DB_URL += "&sslmode=require"
+if NEON_DB_URL and NEON_DB_URL.startswith("postgres://"):
+    NEON_DB_URL = NEON_DB_URL.replace("postgres://", "postgresql://", 1)
 
 app.config['SQLALCHEMY_DATABASE_URI'] = NEON_DB_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['MAX_CONTENT_LENGTH'] = 32 * 1024 * 1024  # 32 МБ
-
-# Настройка пула соединений (ВАЖНО для устранения ошибки SSL connection closed)
-app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-    "pool_pre_ping": True,
-    "pool_recycle": 300,
-}
-
-UPLOAD_FOLDER = 'uploads'
-ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'mp4', 'webm', 'mp3', 'wav', 'ogg'}
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-
-if not os.path.exists(UPLOAD_FOLDER):
-    try:
-        os.makedirs(UPLOAD_FOLDER)
-    except OSError:
-        pass
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {"pool_pre_ping": True, "pool_recycle": 300}
 
 db = SQLAlchemy(app)
 login_manager = LoginManager(app)
 login_manager.login_view = 'login'
 
+# --- ФУНКЦИЯ ЗАГРУЗКИ В ОБЛАКО ---
+def upload_to_cloud(file_obj, resource_type="auto"):
+    if not file_obj: return None
+    try:
+        # Грузим в Cloudinary, папка fontan_app
+        upload_result = cloudinary.uploader.upload(
+            file_obj, 
+            resource_type=resource_type,
+            folder="fontan_app"
+        )
+        return upload_result['secure_url'] # Возвращаем вечную ссылку
+    except Exception as e:
+        print(f"Ошибка Cloudinary: {e}")
+        return None
+
 def allowed_file(filename):
+    ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'mp4', 'webm', 'mp3', 'wav', 'ogg'}
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-# --- БАЗА ДАННЫХ ---
+# --- МОДЕЛИ БАЗЫ ДАННЫХ ---
 
-# ВАЖНО: Исправлены ForeignKey на 'users.id' и 'groups.id'
 group_members = db.Table('group_members',
     db.Column('user_id', db.Integer, db.ForeignKey('users.id'), primary_key=True),
     db.Column('group_id', db.Integer, db.ForeignKey('groups.id'), primary_key=True)
 )
 
 class User(UserMixin, db.Model):
-    __tablename__ = 'users'  # Явное имя таблицы (PostgreSQL не любит имя 'user')
+    __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(150), unique=True, nullable=False)
     email = db.Column(db.String(150), unique=True, nullable=False)
     password = db.Column(db.String(200), nullable=False)
     bio = db.Column(db.String(300), default="Я тут новенький!")
-    avatar = db.Column(db.String(200), default=None)
+    avatar = db.Column(db.String(300), default=None) # Теперь тут URL
     
+    # Новые поля для админки
+    is_admin = db.Column(db.Boolean, default=False)
+    is_banned = db.Column(db.Boolean, default=False)
+    is_verified = db.Column(db.Boolean, default=False) # Галочка
+
     posts = db.relationship('Post', backref='author', lazy=True)
     likes = db.relationship('Like', backref='user', lazy=True)
     groups = db.relationship('Group', secondary=group_members, backref=db.backref('members', lazy='dynamic'))
@@ -92,7 +99,6 @@ class Group(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
     creator_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    avatar = db.Column(db.String(200), default=None)
 
 class Message(db.Model):
     __tablename__ = 'messages'
@@ -101,9 +107,8 @@ class Message(db.Model):
     recipient_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     group_id = db.Column(db.Integer, db.ForeignKey('groups.id'), nullable=True)
     body = db.Column(db.Text, nullable=True) 
-    voice_filename = db.Column(db.String(200), nullable=True)
+    voice_filename = db.Column(db.String(300), nullable=True) # URL
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
-    
     sender = db.relationship('User', foreign_keys=[sender_id])
 
 class Like(db.Model):
@@ -122,7 +127,7 @@ class Comment(db.Model):
     __tablename__ = 'comments'
     id = db.Column(db.Integer, primary_key=True)
     text = db.Column(db.String(500), nullable=True)
-    voice_filename = db.Column(db.String(200), nullable=True)
+    voice_filename = db.Column(db.String(300), nullable=True) # URL
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     post_id = db.Column(db.Integer, db.ForeignKey('posts.id'), nullable=False)
@@ -132,8 +137,8 @@ class Post(db.Model):
     __tablename__ = 'posts'
     id = db.Column(db.Integer, primary_key=True)
     content = db.Column(db.Text, nullable=True)
-    image_filename = db.Column(db.String(200), nullable=True)
-    video_filename = db.Column(db.String(200), nullable=True)
+    image_filename = db.Column(db.String(300), nullable=True) # URL
+    video_filename = db.Column(db.String(300), nullable=True) # URL
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
     views = db.Column(db.Integer, default=0)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
@@ -145,7 +150,15 @@ class Post(db.Model):
 def load_user(user_id):
     return db.session.get(User, int(user_id))
 
-# --- ШАБЛОНЫ ---
+# Проверка на бан перед каждым запросом
+@app.before_request
+def check_ban():
+    if current_user.is_authenticated and current_user.is_banned:
+        logout_user()
+        flash("Ваш аккаунт заблокирован администрацией.", "danger")
+        return redirect(url_for('login'))
+
+# --- ШАБЛОНЫ (ОБНОВЛЕНЫ ДЛЯ URL И АДМИНКИ) ---
 templates = {
     'base.html': """
 <!DOCTYPE html>
@@ -162,10 +175,10 @@ templates = {
         .card { border: none; border-radius: 16px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); margin-bottom: 20px; }
         .avatar { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; background: #ddd; display: flex; align-items: center; justify-content: center; font-weight: bold; color: #555; overflow: hidden; }
         .avatar img { width: 100%; height: 100%; object-fit: cover; }
-        .msg-bubble { padding: 8px 14px; border-radius: 18px; max-width: 75%; margin-bottom: 4px; position: relative; }
-        .msg-sent { background-color: #4f46e5; color: white; align-self: flex-end; border-bottom-right-radius: 4px; }
-        .msg-received { background-color: #e5e7eb; color: black; align-self: flex-start; border-bottom-left-radius: 4px; }
-        .sender-name { font-size: 0.7rem; color: #666; margin-bottom: 2px; margin-left: 10px; }
+        .msg-bubble { padding: 8px 14px; border-radius: 18px; max-width: 75%; margin-bottom: 4px; }
+        .msg-sent { background-color: #4f46e5; color: white; align-self: flex-end; }
+        .msg-received { background-color: #e5e7eb; color: black; align-self: flex-start; }
+        .verified-icon { color: #1DA1F2; margin-left: 4px; }
         .blink { animation: blinker 1s linear infinite; } @keyframes blinker { 50% { opacity: 0; } }
     </style>
 </head>
@@ -181,7 +194,7 @@ templates = {
                     <a class="nav-link text-white fs-5" href="{{ url_for('profile', username=current_user.username) }}">
                           <div class="avatar" style="width: 30px; height: 30px;">
                             {% if current_user.avatar %}
-                                <img src="{{ url_for('uploaded_file', filename=current_user.avatar) }}">
+                                <img src="{{ current_user.avatar }}">
                             {% else %}
                                 {{ current_user.username[0].upper() }}
                             {% endif %}
@@ -215,14 +228,18 @@ templates = {
             <div class="text-center mb-3">
                 <div class="avatar avatar-xl mx-auto mb-2">
                     {% if current_user.avatar %}
-                        <img src="{{ url_for('uploaded_file', filename=current_user.avatar) }}" style="width:100px; height:100px; border-radius:50%;">
+                        <img src="{{ current_user.avatar }}" style="width:100px; height:100px; border-radius:50%;">
                     {% else %}
                         <div style="width:100px; height:100px; border-radius:50%; background:#ccc; line-height:100px; font-size:40px; margin:0 auto;">
                         {{ current_user.username[0].upper() }}
                         </div>
                     {% endif %}
                 </div>
-                <h5>{{ current_user.username }}</h5>
+                <h5>
+                    {{ current_user.username }}
+                    {% if current_user.is_verified %}<i class="bi bi-patch-check-fill verified-icon"></i>{% endif %}
+                </h5>
+                {% if current_user.is_admin %}<span class="badge bg-danger">ADMIN</span>{% endif %}
             </div>
             <hr>
             <a href="{{ url_for('users_list') }}" class="btn btn-outline-primary w-100 mb-2 rounded-pill">Найти людей</a>
@@ -251,18 +268,21 @@ templates = {
                     <a href="{{ url_for('profile', username=post.author.username) }}" class="text-decoration-none">
                         <div class="avatar me-2">
                             {% if post.author.avatar %}
-                                <img src="{{ url_for('uploaded_file', filename=post.author.avatar) }}">
+                                <img src="{{ post.author.avatar }}">
                             {% else %}
                                 {{ post.author.username[0].upper() }}
                             {% endif %}
                         </div>
                     </a>
                     <div>
-                        <a href="{{ url_for('profile', username=post.author.username) }}" class="fw-bold text-dark text-decoration-none">{{ post.author.username }}</a>
+                        <a href="{{ url_for('profile', username=post.author.username) }}" class="fw-bold text-dark text-decoration-none">
+                            {{ post.author.username }}
+                            {% if post.author.is_verified %}<i class="bi bi-patch-check-fill verified-icon"></i>{% endif %}
+                        </a>
                         <div class="text-muted small" style="font-size: 0.75rem;">{{ post.timestamp.strftime('%d.%m %H:%M') }}</div>
                     </div>
                 </div>
-                {% if post.author.id == current_user.id %}
+                {% if post.author.id == current_user.id or current_user.is_admin %}
                 <a class="text-danger" href="{{ url_for('delete_post', post_id=post.id) }}"><i class="bi bi-trash"></i></a>
                 {% endif %}
             </div>
@@ -270,10 +290,10 @@ templates = {
             <div class="mt-2">
                 {% if post.content %}<p class="card-text fs-6">{{ post.content }}</p>{% endif %}
                 {% if post.image_filename %}
-                    <img src="{{ url_for('uploaded_file', filename=post.image_filename) }}" class="img-fluid rounded">
+                    <img src="{{ post.image_filename }}" class="img-fluid rounded">
                 {% endif %}
                 {% if post.video_filename %}
-                    <video controls class="img-fluid rounded"><source src="{{ url_for('uploaded_file', filename=post.video_filename) }}"></video>
+                    <video controls class="img-fluid rounded"><source src="{{ post.video_filename }}"></video>
                 {% endif %}
             </div>
 
@@ -296,25 +316,29 @@ templates = {
                 {% for comment in post.comments_rel %}
                 <div class="mb-2 border-bottom pb-1">
                     <div class="d-flex justify-content-between">
-                         <small><b>{{ comment.author.username }}</b>:</small>
-                         {% if comment.user_id == current_user.id or post.user_id == current_user.id %}
+                         <small>
+                             <b>{{ comment.author.username }}</b>
+                             {% if comment.author.is_verified %}<i class="bi bi-patch-check-fill verified-icon" style="font-size: 10px;"></i>{% endif %}
+                             :
+                         </small>
+                         {% if comment.user_id == current_user.id or post.user_id == current_user.id or current_user.is_admin %}
                             <a href="{{ url_for('delete_comment', comment_id=comment.id) }}" class="text-danger small" style="text-decoration:none;">×</a>
                          {% endif %}
                     </div>
                     {% if comment.text %}<div class="small">{{ comment.text }}</div>{% endif %}
                     {% if comment.voice_filename %}
                         <audio controls style="height: 30px; width: 200px;" class="mt-1">
-                            <source src="{{ url_for('uploaded_file', filename=comment.voice_filename) }}">
+                            <source src="{{ comment.voice_filename }}">
                         </audio>
                     {% endif %}
                 </div>
                 {% endfor %}
                 <div class="mt-2">
-                     <form action="{{ url_for('add_comment', post_id=post.id) }}" method="POST" class="d-flex gap-1 align-items-center">
+                      <form action="{{ url_for('add_comment', post_id=post.id) }}" method="POST" class="d-flex gap-1 align-items-center">
                         <input type="text" name="text" class="form-control form-control-sm rounded-pill" placeholder="Комментарий...">
                         <button type="button" class="btn btn-sm btn-danger btn-record-comment rounded-circle" data-post-id="{{ post.id }}"><i class="bi bi-mic-fill"></i></button>
                         <button type="submit" class="btn btn-sm btn-primary rounded-circle"><i class="bi bi-send-fill"></i></button>
-                     </form>
+                      </form>
                 </div>
             </div>
         </div>
@@ -325,7 +349,6 @@ templates = {
 </div>
 
 <script>
-// Логика записи комментариев
 document.querySelectorAll('.btn-record-comment').forEach(btn => {
     let mediaRecorder;
     let audioChunks = [];
@@ -374,7 +397,7 @@ document.querySelectorAll('.btn-record-comment').forEach(btn => {
                 <div class="d-flex align-items-center">
                     <div class="avatar me-3">
                         {% if req.user.avatar %}
-                            <img src="{{ url_for('uploaded_file', filename=req.user.avatar) }}">
+                            <img src="{{ req.user.avatar }}">
                         {% else %}
                             {{ req.user.username[0].upper() }}
                         {% endif %}
@@ -411,7 +434,7 @@ document.querySelectorAll('.btn-record-comment').forEach(btn => {
                 <a href="{{ url_for('messenger', type='private', chat_id=friend.id) }}" class="d-flex align-items-center p-3 text-decoration-none text-dark border-bottom bg-white hover-shadow">
                     <div class="avatar me-3">
                         {% if friend.avatar %}
-                            <img src="{{ url_for('uploaded_file', filename=friend.avatar) }}">
+                            <img src="{{ friend.avatar }}">
                         {% else %}
                             {{ friend.username[0].upper() }}
                         {% endif %}
@@ -509,7 +532,6 @@ document.querySelectorAll('.btn-record-comment').forEach(btn => {
     const sendBtn = document.getElementById('btn-send-msg');
     const recordBtn = document.getElementById('btn-record-msg');
 
-    // Отправка текста
     async function sendMessage(text, voiceBlob = null) {
         const formData = new FormData();
         formData.append('type', chatType);
@@ -526,7 +548,6 @@ document.querySelectorAll('.btn-record-comment').forEach(btn => {
         if (msgInput.value) sendMessage(msgInput.value);
     });
 
-    // Запись голоса
     let mediaRecorder;
     let audioChunks = [];
     let isRecording = false;
@@ -588,29 +609,88 @@ document.querySelectorAll('.btn-record-comment').forEach(btn => {
 {% endif %}
 {% endblock %}
     """,
-    'profile.html': """{% extends "base.html" %} {% block content %} <div class="card overflow-hidden"> <div style="height: 180px; background: linear-gradient(45deg, #4f46e5, #ec4899);"></div> <div class="card-body position-relative pt-0 pb-4"> <div class="position-absolute start-0 ms-4" style="top: -60px;"> <div class="avatar avatar-xl"> {% if user.avatar %} <img src="{{ url_for('uploaded_file', filename=user.avatar) }}"> {% else %} {{ user.username[0].upper() }} {% endif %} </div> </div> <div class="mt-5 pt-2 ms-2 d-flex justify-content-between align-items-start"> <div> <h2 class="fw-bold mb-0">{{ user.username }}</h2> <p class="text-muted mb-2">{{ user.bio }}</p> </div> <div class="d-flex gap-2"> {% if current_user.id != user.id %} {% if friendship_status == 'accepted' %} <a href="{{ url_for('messenger', type='private', chat_id=user.id) }}" class="btn btn-primary rounded-pill px-4">Сообщение</a> <a href="{{ url_for('remove_friend', user_id=user.id) }}" class="btn btn-outline-danger rounded-pill">Удалить</a> {% elif friendship_status == 'pending_sent' %} <button class="btn btn-secondary rounded-pill px-4" disabled>Запрос отправлен</button> {% elif friendship_status == 'pending_received' %} <a href="{{ url_for('accept_friend', user_id=user.id) }}" class="btn btn-success rounded-pill px-4">Принять</a> {% else %} <a href="{{ url_for('add_friend', user_id=user.id) }}" class="btn btn-primary rounded-pill px-4">Добавить в друзья</a> {% endif %} {% else %} <a href="{{ url_for('settings') }}" class="btn btn-outline-secondary rounded-pill">Настройки</a> {% endif %} </div> </div> </div> </div> <div class="row"> <div class="col-md-8 mx-auto"> <h5 class="mb-3 ps-2">Публикации</h5> {% for post in posts %} <div class="card p-3"> <div class="d-flex justify-content-between"> <div class="text-muted small">{{ post.timestamp.strftime('%d.%m %H:%M') }}</div> {% if post.author.id == current_user.id %} <a href="{{ url_for('delete_post', post_id=post.id) }}" class="text-danger small text-decoration-none">Удалить</a> {% endif %} </div> <p class="mt-2">{{ post.content }}</p> {% if post.image_filename %} <img src="{{ url_for('uploaded_file', filename=post.image_filename) }}" class="post-media"> {% endif %} </div> {% endfor %} </div> </div> {% endblock %}""",
-    'settings.html': """{% extends "base.html" %} {% block content %} <div class="row justify-content-center"><div class="col-md-6"><div class="card p-4"><h3 class="mb-4">Настройки</h3><form action="{{ url_for('update_settings') }}" method="POST" enctype="multipart/form-data"><div class="mb-4 text-center">{% if current_user.avatar %}<div class="avatar avatar-xl mx-auto mb-3"><img src="{{ url_for('uploaded_file', filename=current_user.avatar) }}"></div>{% else %}<div class="avatar avatar-xl mx-auto mb-3">{{ current_user.username[0].upper() }}</div>{% endif %}<label class="btn btn-sm btn-outline-primary rounded-pill">Изменить фото <input type="file" name="avatar" hidden accept="image/*"></label></div><div class="mb-3"><label class="form-label text-muted small">Никнейм</label><input type="text" name="username" class="form-control" value="{{ current_user.username }}"></div><div class="mb-4"><label class="form-label text-muted small">Описание</label><textarea name="bio" class="form-control" rows="3">{{ current_user.bio }}</textarea></div><button type="submit" class="btn btn-primary w-100 py-2 rounded-pill">Сохранить</button></form></div></div></div> {% endblock %}""",
+    'profile.html': """
+{% extends "base.html" %} 
+{% block content %} 
+<div class="card overflow-hidden"> 
+<div style="height: 180px; background: linear-gradient(45deg, #4f46e5, #ec4899);"></div> 
+<div class="card-body position-relative pt-0 pb-4"> 
+<div class="position-absolute start-0 ms-4" style="top: -60px;"> 
+<div class="avatar avatar-xl"> 
+{% if user.avatar %} <img src="{{ user.avatar }}"> {% else %} {{ user.username[0].upper() }} {% endif %} 
+</div> 
+</div> 
+<div class="mt-5 pt-2 ms-2 d-flex justify-content-between align-items-start"> 
+<div> 
+<h2 class="fw-bold mb-0">
+    {{ user.username }}
+    {% if user.is_verified %}<i class="bi bi-patch-check-fill verified-icon"></i>{% endif %}
+</h2> 
+<p class="text-muted mb-2">{{ user.bio }}</p> 
+</div> 
+<div class="d-flex gap-2 flex-wrap"> 
+{% if current_user.id != user.id %} 
+    {% if friendship_status == 'accepted' %} 
+    <a href="{{ url_for('messenger', type='private', chat_id=user.id) }}" class="btn btn-primary rounded-pill px-4">Сообщение</a> 
+    <a href="{{ url_for('remove_friend', user_id=user.id) }}" class="btn btn-outline-danger rounded-pill">Удалить</a> 
+    {% elif friendship_status == 'pending_sent' %} 
+    <button class="btn btn-secondary rounded-pill px-4" disabled>Запрос отправлен</button> 
+    {% elif friendship_status == 'pending_received' %} 
+    <a href="{{ url_for('accept_friend', user_id=user.id) }}" class="btn btn-success rounded-pill px-4">Принять</a> 
+    {% else %} 
+    <a href="{{ url_for('add_friend', user_id=user.id) }}" class="btn btn-primary rounded-pill px-4">Добавить в друзья</a> 
+    {% endif %} 
+
+    {% if current_user.is_admin %}
+        <a href="{{ url_for('admin_ban_user', user_id=user.id) }}" class="btn btn-danger rounded-pill">
+            {% if user.is_banned %}Разбанить{% else %}ЗАБАНИТЬ{% endif %}
+        </a>
+        <a href="{{ url_for('admin_verify_user', user_id=user.id) }}" class="btn btn-info text-white rounded-pill">
+            {% if user.is_verified %}Снять галку{% else %}Дать галку{% endif %}
+        </a>
+    {% endif %}
+
+{% else %} 
+<a href="{{ url_for('settings') }}" class="btn btn-outline-secondary rounded-pill">Настройки</a> 
+{% endif %} 
+</div> 
+</div> 
+</div> 
+</div> 
+<div class="row"> 
+<div class="col-md-8 mx-auto"> 
+<h5 class="mb-3 ps-2">Публикации</h5> 
+{% for post in posts %} 
+<div class="card p-3"> 
+<div class="d-flex justify-content-between"> 
+<div class="text-muted small">{{ post.timestamp.strftime('%d.%m %H:%M') }}</div> 
+{% if post.author.id == current_user.id or current_user.is_admin %} 
+<a href="{{ url_for('delete_post', post_id=post.id) }}" class="text-danger small text-decoration-none">Удалить</a> 
+{% endif %} 
+</div> 
+<p class="mt-2">{{ post.content }}</p> 
+{% if post.image_filename %} <img src="{{ post.image_filename }}" class="post-media img-fluid rounded"> {% endif %} 
+</div> 
+{% endfor %} 
+</div> 
+</div> 
+{% endblock %}
+""",
+    'settings.html': """{% extends "base.html" %} {% block content %} <div class="row justify-content-center"><div class="col-md-6"><div class="card p-4"><h3 class="mb-4">Настройки</h3><form action="{{ url_for('update_settings') }}" method="POST" enctype="multipart/form-data"><div class="mb-4 text-center">{% if current_user.avatar %}<div class="avatar avatar-xl mx-auto mb-3"><img src="{{ current_user.avatar }}"></div>{% else %}<div class="avatar avatar-xl mx-auto mb-3">{{ current_user.username[0].upper() }}</div>{% endif %}<label class="btn btn-sm btn-outline-primary rounded-pill">Изменить фото <input type="file" name="avatar" hidden accept="image/*"></label></div><div class="mb-3"><label class="form-label text-muted small">Никнейм</label><input type="text" name="username" class="form-control" value="{{ current_user.username }}"></div><div class="mb-4"><label class="form-label text-muted small">Описание</label><textarea name="bio" class="form-control" rows="3">{{ current_user.bio }}</textarea></div><button type="submit" class="btn btn-primary w-100 py-2 rounded-pill">Сохранить</button></form></div></div></div> {% endblock %}""",
     'auth.html': """{% extends "base.html" %} {% block content %} <div class="row justify-content-center"><div class="col-md-4"><div class="card p-4 mt-5"><h3 class="text-center">{{ title }}</h3><form method="POST">{% if not is_login %}<input type="email" name="email" class="form-control mb-3" placeholder="Email" required>{% endif %}<input type="text" name="username" class="form-control mb-3" placeholder="Ник" required><input type="password" name="password" class="form-control mb-3" placeholder="Пароль" required><button class="btn btn-primary w-100">{{ title }}</button></form><div class="text-center mt-3"><a href="{{ url_for('login' if not is_login else 'register') }}">{{ 'Войти' if not is_login else 'Регистрация' }}</a></div></div></div></div> {% endblock %}""",
-    'users.html': """{% extends "base.html" %} {% block content %} <h3>Поиск людей</h3> <div class="row"> {% for u in users %} {% if u.id != current_user.id %} <div class="col-md-4 mb-3"><div class="card p-3 d-flex flex-row align-items-center"><div class="avatar me-3">{% if u.avatar %}<img src="{{ url_for('uploaded_file', filename=u.avatar) }}">{% else %}{{ u.username[0].upper() }}{% endif %}</div><div><h5>{{ u.username }}</h5><a href="{{ url_for('profile', username=u.username) }}" class="btn btn-sm btn-outline-primary rounded-pill">Профиль</a></div></div></div> {% endif %} {% endfor %} </div> {% endblock %}"""
+    'users.html': """{% extends "base.html" %} {% block content %} <h3>Поиск людей</h3> <div class="row"> {% for u in users %} {% if u.id != current_user.id and u.username != 'admin' %} <div class="col-md-4 mb-3"><div class="card p-3 d-flex flex-row align-items-center"><div class="avatar me-3">{% if u.avatar %}<img src="{{ u.avatar }}">{% else %}{{ u.username[0].upper() }}{% endif %}</div><div><h5>{{ u.username }} {% if u.is_verified %}<i class="bi bi-patch-check-fill verified-icon"></i>{% endif %}</h5><a href="{{ url_for('profile', username=u.username) }}" class="btn btn-sm btn-outline-primary rounded-pill">Профиль</a></div></div></div> {% endif %} {% endfor %} </div> {% endblock %}"""
 }
 app.jinja_loader = jinja2.DictLoader(templates)
 
 # --- ROUTES ---
 
-@app.route('/uploads/<filename>')
-def uploaded_file(filename):
-    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
-
 @app.route('/')
 @login_required
 def index():
     posts = Post.query.order_by(Post.timestamp.desc()).all()
-    # Умный счетчик просмотров (1 юзер = 1 просмотр)
     for p in posts:
-        # Проверяем, видел ли уже этот пользователь этот пост
         view = PostView.query.filter_by(user_id=current_user.id, post_id=p.id).first()
         if not view:
-            # Если не видел, создаем запись и увеличиваем счетчик
             db.session.add(PostView(user_id=current_user.id, post_id=p.id))
             p.views += 1
     db.session.commit()
@@ -632,6 +712,29 @@ def profile(username):
             elif friendship.sender_id == current_user.id: status = 'pending_sent'
             else: status = 'pending_received'
     return render_template('profile.html', user=user, posts=posts, friendship_status=status)
+
+# --- АДМИНСКИЕ ФУНКЦИИ ---
+@app.route('/admin/ban/<int:user_id>')
+@login_required
+def admin_ban_user(user_id):
+    if not current_user.is_admin: abort(403)
+    user = db.session.get(User, user_id)
+    if user and user.username != 'admin':
+        user.is_banned = not user.is_banned
+        db.session.commit()
+        flash(f"Пользователь {'забанен' if user.is_banned else 'разбанен'}", "warning")
+    return redirect(url_for('profile', username=user.username))
+
+@app.route('/admin/verify/<int:user_id>')
+@login_required
+def admin_verify_user(user_id):
+    if not current_user.is_admin: abort(403)
+    user = db.session.get(User, user_id)
+    if user:
+        user.is_verified = not user.is_verified
+        db.session.commit()
+        flash("Статус верификации изменен", "success")
+    return redirect(url_for('profile', username=user.username))
 
 # --- ДРУЗЬЯ ---
 @app.route('/add_friend/<int:user_id>')
@@ -695,7 +798,10 @@ def messenger():
     friends = []
     for f in friends_relations:
         uid = f.receiver_id if f.sender_id == current_user.id else f.sender_id
-        friends.append(db.session.get(User, uid))
+        # Не показываем админа в друзьях
+        u = db.session.get(User, uid)
+        if u.username != 'admin':
+            friends.append(u)
         
     groups = current_user.groups
     active_chat = None
@@ -743,10 +849,10 @@ def get_messages():
 
     result = []
     for m in messages:
-        voice_url = url_for('uploaded_file', filename=m.voice_filename) if m.voice_filename else None
+        # voice_filename теперь URL
         result.append({
             'body': m.body,
-            'voice_url': voice_url,
+            'voice_url': m.voice_filename,
             'sender_id': m.sender_id,
             'sender_name': m.sender.username
         })
@@ -760,16 +866,14 @@ def send_api_message():
     body = request.form.get('body')
     voice = request.files.get('voice')
     
-    voice_filename = None
+    voice_url = None
     if voice:
-        filename = f"msg_voice_{uuid.uuid4()}.webm"
-        voice.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-        voice_filename = filename
+        voice_url = upload_to_cloud(voice, resource_type="video")
 
-    if not body and not voice_filename:
+    if not body and not voice_url:
         return jsonify({'error': 'Empty'}), 400
 
-    msg = Message(sender_id=current_user.id, body=body, voice_filename=voice_filename)
+    msg = Message(sender_id=current_user.id, body=body, voice_filename=voice_url)
     if type_ == 'private':
         msg.recipient_id = target_id
     elif type_ == 'group':
@@ -784,12 +888,11 @@ def send_api_message():
 @login_required
 def add_voice_comment(post_id):
     if 'voice' in request.files:
-        file = request.files['voice']
-        filename = f"comment_voice_{uuid.uuid4()}.webm"
-        file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-        db.session.add(Comment(voice_filename=filename, user_id=current_user.id, post_id=post_id))
-        db.session.commit()
-        return jsonify({'success': True})
+        url = upload_to_cloud(request.files['voice'], resource_type="video")
+        if url:
+            db.session.add(Comment(voice_filename=url, user_id=current_user.id, post_id=post_id))
+            db.session.commit()
+            return jsonify({'success': True})
     return jsonify({'error': 'No file'}), 400
 
 @app.route('/users')
@@ -809,13 +912,11 @@ def update_settings():
     username = request.form.get('username')
     bio = request.form.get('bio')
     file = request.files.get('avatar')
-    if file and file.filename != '' and allowed_file(file.filename):
-        try:
-            ext = file.filename.rsplit('.', 1)[1].lower()
-            filename = f"avatar_{current_user.id}_{uuid.uuid4().hex[:8]}.{ext}"
-            file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-            current_user.avatar = filename
-        except OSError: flash("Ошибка загрузки", "danger")
+    
+    if file and file.filename != '':
+        url = upload_to_cloud(file, resource_type="image")
+        if url: current_user.avatar = url
+            
     if bio: current_user.bio = bio
     if username and username != current_user.username:
         if not User.query.filter_by(username=username).first(): current_user.username = username
@@ -828,15 +929,17 @@ def update_settings():
 def create_post():
     content = request.form.get('content')
     file = request.files.get('media')
-    image_filename, video_filename = None, None
-    if file and file.filename != '' and allowed_file(file.filename):
+    image_url, video_url = None, None
+    
+    if file and file.filename != '':
         ext = file.filename.rsplit('.', 1)[1].lower()
-        filename = str(uuid.uuid4()) + '.' + ext
-        file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-        if ext in ['mp4', 'webm', 'mov']: video_filename = filename
-        else: image_filename = filename
-    if content or image_filename or video_filename:
-        db.session.add(Post(content=content, image_filename=image_filename, video_filename=video_filename, author=current_user))
+        if ext in ['mp4', 'webm', 'mov']:
+            video_url = upload_to_cloud(file, resource_type="video")
+        else:
+            image_url = upload_to_cloud(file, resource_type="image")
+            
+    if content or image_url or video_url:
+        db.session.add(Post(content=content, image_filename=image_url, video_filename=video_url, author=current_user))
         db.session.commit()
     return redirect(url_for('index'))
 
@@ -844,10 +947,11 @@ def create_post():
 @login_required
 def delete_post(post_id):
     post = db.session.get(Post, post_id)
-    if post and post.author.id == current_user.id:
+    # Админ может удалять всё
+    if post and (post.author.id == current_user.id or current_user.is_admin):
         db.session.delete(post)
         db.session.commit()
-    return redirect(url_for('profile', username=current_user.username))
+    return redirect(url_for('index'))
 
 @app.route('/like/<int:post_id>', methods=['POST'])
 @login_required
@@ -871,7 +975,7 @@ def add_comment(post_id):
 @login_required
 def delete_comment(comment_id):
     comment = db.session.get(Comment, comment_id)
-    if comment and (comment.user_id == current_user.id or comment.post.user_id == current_user.id):
+    if comment and (comment.user_id == current_user.id or comment.post.user_id == current_user.id or current_user.is_admin):
         db.session.delete(comment)
         db.session.commit()
     return redirect(url_for('index'))
@@ -892,8 +996,11 @@ def login():
     if request.method == 'POST':
         user = User.query.filter_by(username=request.form.get('username')).first()
         if user and check_password_hash(user.password, request.form.get('password')):
-            login_user(user)
-            return redirect(url_for('index'))
+            if user.is_banned:
+                flash("Вы забанены.", "danger")
+            else:
+                login_user(user)
+                return redirect(url_for('index'))
     return render_template('auth.html', title="Вход", is_login=True)
 
 @app.route('/logout')
@@ -902,10 +1009,27 @@ def logout():
     logout_user()
     return redirect(url_for('login'))
 
-# --- СОЗДАНИЕ ТАБЛИЦ (ДЛЯ RENDER) ---
+# --- СОЗДАНИЕ ТАБЛИЦ И АДМИНА ---
+def create_admin_user():
+    admin = User.query.filter_by(username='admin').first()
+    if not admin:
+        print("Создаю админа...")
+        admin = User(
+            username='admin',
+            email='admin@fontan.local',
+            password=generate_password_hash('12we1qtr11'),
+            is_admin=True,
+            is_verified=True,
+            bio="Главный Администратор"
+        )
+        db.session.add(admin)
+        db.session.commit()
+        print("Админ создан: admin / 12we1qtr11")
+
 with app.app_context():
     db.create_all()
-    print("База данных и таблицы успешно созданы!")
+    create_admin_user() # Проверка и создание админа при запуске
+    print("База данных готова!")
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
