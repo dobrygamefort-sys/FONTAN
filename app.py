@@ -16,9 +16,9 @@ import jinja2
 
 # --- НАСТРОЙКИ ПРИЛОЖЕНИЯ ---
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'fontan_ultra_admin_edition_v9_reset'
+app.config['SECRET_KEY'] = 'fontan_ultra_admin_edition_v8'
 
-# --- НАСТРОЙКИ CLOUDINARY (ТВОИ ДАННЫЕ ВСТАВЛЕНЫ) ---
+# --- НАСТРОЙКИ CLOUDINARY (ВСТАВЬ СВОИ ДАННЫЕ СЮДА) ---
 cloudinary.config(
     cloud_name = 'daz4839e7', 
     api_key = '371541773313745', 
@@ -29,7 +29,7 @@ cloudinary.config(
 # --- НАСТРОЙКА БД (NEON / RENDER) ---
 NEON_DB_URL = os.environ.get('DATABASE_URL')
 if not NEON_DB_URL:
-    # Твоя резервная ссылка
+    # Твоя резервная ссылка (локальная)
     NEON_DB_URL = 'postgresql://neondb_owner:npg_pIZeE3uY7XLF@ep-shy-field-ahelwpwv-pooler.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require' 
 
 if NEON_DB_URL and NEON_DB_URL.startswith("postgres://"):
@@ -76,12 +76,12 @@ class User(UserMixin, db.Model):
     email = db.Column(db.String(150), unique=True, nullable=False)
     password = db.Column(db.String(200), nullable=False)
     bio = db.Column(db.String(300), default="Я тут новенький!")
-    avatar = db.Column(db.String(300), default=None) # Тут URL
+    avatar = db.Column(db.String(300), default=None) # Теперь тут URL
     
-    # Поля админа
+    # Новые поля для админки
     is_admin = db.Column(db.Boolean, default=False)
     is_banned = db.Column(db.Boolean, default=False)
-    is_verified = db.Column(db.Boolean, default=False)
+    is_verified = db.Column(db.Boolean, default=False) # Галочка
 
     posts = db.relationship('Post', backref='author', lazy=True)
     likes = db.relationship('Like', backref='user', lazy=True)
@@ -150,7 +150,7 @@ class Post(db.Model):
 def load_user(user_id):
     return db.session.get(User, int(user_id))
 
-# Проверка на бан
+# Проверка на бан перед каждым запросом
 @app.before_request
 def check_ban():
     if current_user.is_authenticated and current_user.is_banned:
@@ -158,7 +158,7 @@ def check_ban():
         flash("Ваш аккаунт заблокирован администрацией.", "danger")
         return redirect(url_for('login'))
 
-# --- ШАБЛОНЫ ---
+# --- ШАБЛОНЫ (ОБНОВЛЕНЫ ДЛЯ URL И АДМИНКИ) ---
 templates = {
     'base.html': """
 <!DOCTYPE html>
@@ -166,7 +166,7 @@ templates = {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Fontan V4</title>
+    <title>Fontan V3</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
     <style>
@@ -1009,7 +1009,7 @@ def logout():
     logout_user()
     return redirect(url_for('login'))
 
-# --- СБРОС И СОЗДАНИЕ БД (ВАЖНО) ---
+# --- СОЗДАНИЕ ТАБЛИЦ И АДМИНА ---
 def create_admin_user():
     admin = User.query.filter_by(username='admin').first()
     if not admin:
@@ -1026,15 +1026,10 @@ def create_admin_user():
         db.session.commit()
         print("Админ создан: admin / 12we1qtr11")
 
-# Блок инициализации
 with app.app_context():
-    # ЭТА КОМАНДА СБРОСИТ БАЗУ (УДАЛИТ ВСЕ), ЧТОБЫ ИСПРАВИТЬ ОШИБКИ
-    db.drop_all()
-    # СОЗДАЕТ ВСЕ ТАБЛИЦЫ ЗАНОВО
     db.create_all()
-    # СОЗДАЕТ АДМИНА
-    create_admin_user()
-    print("База данных полностью сброшена и пересоздана!")
+    create_admin_user() # Проверка и создание админа при запуске
+    print("База данных готова!")
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
