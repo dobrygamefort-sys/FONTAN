@@ -1,7 +1,7 @@
 import os
 import uuid
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 # Подключаем Cloudinary
 import cloudinary
 import cloudinary.uploader
@@ -11,7 +11,7 @@ from flask import Flask, render_template, redirect, url_for, request, flash, jso
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
-from sqlalchemy import or_, and_
+from sqlalchemy import or_, and_, func
 import jinja2
 
 # --- НАСТРОЙКИ ПРИЛОЖЕНИЯ ---
@@ -62,6 +62,24 @@ def allowed_file(filename):
     ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'mp4', 'webm', 'mp3', 'wav', 'ogg'}
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+# --- AI МОДЕРАЦИЯ КОНТЕНТА ---
+def moderate_content(text):
+    """Простая AI модерация контента на запрещённые слова"""
+    if not text:
+        return True, ""
+    
+    forbidden_words = [
+        'спам', 'реклама', 'казино', 'ставки', 'наркотики', 
+        'оружие', 'взлом', 'hack', 'porn', 'sex'
+    ]
+    
+    text_lower = text.lower()
+    for word in forbidden_words:
+        if word in text_lower:
+            return False, f"Обнаружено запрещённое слово: {word}"
+    
+    return True, ""
+
 # --- МОДЕЛИ БАЗЫ ДАННЫХ ---
 
 group_members = db.Table('group_members',
@@ -76,7 +94,8 @@ class User(UserMixin, db.Model):
     email = db.Column(db.String(150), unique=True, nullable=False)
     password = db.Column(db.String(200), nullable=False)
     bio = db.Column(db.String(300), default="Я тут новенький!")
-    avatar = db.Column(db.String(300), default=None) # Тут URL
+    avatar = db.Column(db.String(300), default=None)
+    theme = db.Column(db.String(10), default='light')
     
     # Поля админа
     is_admin = db.Column(db.Boolean, default=False)
@@ -86,6 +105,29 @@ class User(UserMixin, db.Model):
     posts = db.relationship('Post', backref='author', lazy=True)
     likes = db.relationship('Like', backref='user', lazy=True)
     groups = db.relationship('Group', secondary=group_members, backref=db.backref('members', lazy='dynamic'))
+    
+    # Подписки (вайбики)
+    following = db.relationship(
+        'Follow',
+        foreign_keys='Follow.follower_id',
+        backref='follower',
+        lazy='dynamic',
+        cascade='all, delete-orphan'
+    )
+    followers = db.relationship(
+        'Follow',
+        foreign_keys='Follow.following_id',
+        backref='following_user',
+        lazy='dynamic',
+        cascade='all, delete-orphan'
+    )
+
+class Follow(db.Model):
+    __tablename__ = 'follows'
+    id = db.Column(db.Integer, primary_key=True)
+    follower_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    following_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
 
 class Friendship(db.Model):
     __tablename__ = 'friendships'
@@ -107,7 +149,7 @@ class Message(db.Model):
     recipient_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     group_id = db.Column(db.Integer, db.ForeignKey('groups.id'), nullable=True)
     body = db.Column(db.Text, nullable=True) 
-    voice_filename = db.Column(db.String(300), nullable=True) # URL
+    voice_filename = db.Column(db.String(300), nullable=True)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
     sender = db.relationship('User', foreign_keys=[sender_id])
 
@@ -127,24 +169,44 @@ class Comment(db.Model):
     __tablename__ = 'comments'
     id = db.Column(db.Integer, primary_key=True)
     text = db.Column(db.String(500), nullable=True)
-    voice_filename = db.Column(db.String(300), nullable=True) # URL
+    voice_filename = db.Column(db.String(300), nullable=True)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     post_id = db.Column(db.Integer, db.ForeignKey('posts.id'), nullable=False)
     author = db.relationship('User', backref='comments')
 
+class Poll(db.Model):
+    __tablename__ = 'polls'
+    id = db.Column(db.Integer, primary_key=True)
+    post_id = db.Column(db.Integer, db.ForeignKey('posts.id'), nullable=False)
+    question = db.Column(db.String(300), nullable=False)
+    options = db.Column(db.Text, nullable=False)  # JSON строка с вариантами
+    votes = db.Column(db.Text, default='{}')  # JSON строка с голосами
+
+class PollVote(db.Model):
+    __tablename__ = 'poll_votes'
+    id = db.Column(db.Integer, primary_key=True)
+    poll_id = db.Column(db.Integer, db.ForeignKey('polls.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    option_index = db.Column(db.Integer, nullable=False)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+
 class Post(db.Model):
     __tablename__ = 'posts'
     id = db.Column(db.Integer, primary_key=True)
     content = db.Column(db.Text, nullable=True)
-    image_filename = db.Column(db.String(300), nullable=True) # URL
-    video_filename = db.Column(db.String(300), nullable=True) # URL
+    image_filename = db.Column(db.String(300), nullable=True)
+    video_filename = db.Column(db.String(300), nullable=True)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
     views = db.Column(db.Integer, default=0)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    is_moderated = db.Column(db.Boolean, default=True)
+    moderation_reason = db.Column(db.String(200), nullable=True)
+    
     comments_rel = db.relationship('Comment', backref='post', cascade="all, delete-orphan", lazy=True)
     likes_rel = db.relationship('Like', backref='post', cascade="all, delete-orphan", lazy=True)
     views_rel = db.relationship('PostView', backref='post', cascade="all, delete-orphan", lazy=True)
+    poll = db.relationship('Poll', backref='post', uselist=False, cascade="all, delete-orphan")
 
 @login_manager.user_loader
 def load_user(user_id):
@@ -158,28 +220,260 @@ def check_ban():
         flash("Ваш аккаунт заблокирован администрацией.", "danger")
         return redirect(url_for('login'))
 
+# --- ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ ВРЕМЕНИ ---
+def time_ago(dt):
+    """Красивое отображение времени"""
+    now = datetime.utcnow()
+    diff = now - dt
+    
+    seconds = diff.total_seconds()
+    
+    if seconds < 60:
+        return "только что"
+    elif seconds < 3600:
+        minutes = int(seconds / 60)
+        return f"{minutes} мин назад"
+    elif seconds < 86400:
+        hours = int(seconds / 3600)
+        return f"{hours} ч назад"
+    elif seconds < 604800:
+        days = int(seconds / 86400)
+        return f"{days} д назад"
+    else:
+        return dt.strftime('%d.%m.%Y в %H:%M')
+
+app.jinja_env.filters['time_ago'] = time_ago
+
 # --- ШАБЛОНЫ ---
 templates = {
     'base.html': """
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="ru" data-theme="{{ current_user.theme if current_user.is_authenticated else 'light' }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Fontan V4</title>
+    <title>Fontan V5</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
     <style>
-        body { background-color: #f0f2f5; font-family: 'Segoe UI', sans-serif; }
-        .navbar { background: linear-gradient(135deg, #4f46e5, #7c3aed); }
-        .card { border: none; border-radius: 16px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); margin-bottom: 20px; }
-        .avatar { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; background: #ddd; display: flex; align-items: center; justify-content: center; font-weight: bold; color: #555; overflow: hidden; }
-        .avatar img { width: 100%; height: 100%; object-fit: cover; }
-        .msg-bubble { padding: 8px 14px; border-radius: 18px; max-width: 75%; margin-bottom: 4px; }
-        .msg-sent { background-color: #4f46e5; color: white; align-self: flex-end; }
-        .msg-received { background-color: #e5e7eb; color: black; align-self: flex-start; }
-        .verified-icon { color: #1DA1F2; margin-left: 4px; }
-        .blink { animation: blinker 1s linear infinite; } @keyframes blinker { 50% { opacity: 0; } }
+        :root[data-theme="light"] {
+            --bg-color: #f0f2f5;
+            --card-bg: #ffffff;
+            --text-color: #000000;
+            --text-muted: #65676b;
+            --border-color: #e4e6eb;
+            --navbar-bg: linear-gradient(135deg, #4f46e5, #7c3aed);
+            --hover-bg: #f0f2f5;
+        }
+        
+        :root[data-theme="dark"] {
+            --bg-color: #18191a;
+            --card-bg: #242526;
+            --text-color: #e4e6eb;
+            --text-muted: #b0b3b8;
+            --border-color: #3a3b3c;
+            --navbar-bg: linear-gradient(135deg, #3730a3, #5b21b6);
+            --hover-bg: #3a3b3c;
+        }
+        
+        body { 
+            background-color: var(--bg-color); 
+            color: var(--text-color);
+            font-family: 'Segoe UI', sans-serif;
+            transition: background-color 0.3s, color 0.3s;
+        }
+        
+        .navbar { 
+            background: var(--navbar-bg);
+            transition: background 0.3s;
+        }
+        
+        .card { 
+            background-color: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 16px; 
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1); 
+            margin-bottom: 20px;
+            transition: all 0.3s;
+            animation: fadeIn 0.5s ease-in;
+        }
+        
+        .card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        @keyframes slideIn {
+            from { transform: translateX(-100%); }
+            to { transform: translateX(0); }
+        }
+        
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+        
+        .avatar { 
+            width: 40px; 
+            height: 40px; 
+            border-radius: 50%; 
+            object-fit: cover; 
+            background: var(--hover-bg); 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            font-weight: bold; 
+            color: var(--text-muted); 
+            overflow: hidden;
+            transition: transform 0.3s;
+        }
+        
+        .avatar:hover {
+            transform: scale(1.1);
+        }
+        
+        .avatar img { 
+            width: 100%; 
+            height: 100%; 
+            object-fit: cover; 
+        }
+        
+        .msg-bubble { 
+            padding: 8px 14px; 
+            border-radius: 18px; 
+            max-width: 75%; 
+            margin-bottom: 4px;
+            animation: slideIn 0.3s ease-out;
+        }
+        
+        .msg-sent { 
+            background-color: #4f46e5; 
+            color: white; 
+            align-self: flex-end; 
+        }
+        
+        .msg-received { 
+            background-color: var(--hover-bg); 
+            color: var(--text-color); 
+            align-self: flex-start; 
+        }
+        
+        .verified-icon { 
+            color: #1DA1F2; 
+            margin-left: 4px; 
+        }
+        
+        .blink { 
+            animation: blinker 1s linear infinite; 
+        } 
+        
+        @keyframes blinker { 
+            50% { opacity: 0; } 
+        }
+        
+        .text-muted {
+            color: var(--text-muted) !important;
+        }
+        
+        .border-top, .border-bottom {
+            border-color: var(--border-color) !important;
+        }
+        
+        .bg-light {
+            background-color: var(--hover-bg) !important;
+        }
+        
+        .form-control, .form-select {
+            background-color: var(--card-bg);
+            color: var(--text-color);
+            border-color: var(--border-color);
+        }
+        
+        .form-control:focus, .form-select:focus {
+            background-color: var(--card-bg);
+            color: var(--text-color);
+            border-color: #4f46e5;
+        }
+        
+        .btn-outline-primary:hover,
+        .btn-outline-success:hover,
+        .btn-outline-secondary:hover {
+            color: white;
+        }
+        
+        a {
+            color: inherit;
+        }
+        
+        .post-media {
+            max-width: 100%;
+            border-radius: 12px;
+            transition: transform 0.3s;
+        }
+        
+        .post-media:hover {
+            transform: scale(1.02);
+        }
+        
+        .poll-option {
+            transition: all 0.3s;
+            cursor: pointer;
+        }
+        
+        .poll-option:hover {
+            background-color: var(--hover-bg);
+            transform: translateX(5px);
+        }
+        
+        .poll-bar {
+            height: 100%;
+            background: linear-gradient(90deg, #4f46e5, #7c3aed);
+            border-radius: 8px;
+            transition: width 0.5s ease-out;
+        }
+        
+        .theme-toggle {
+            cursor: pointer;
+            font-size: 1.3rem;
+            transition: transform 0.3s;
+        }
+        
+        .theme-toggle:hover {
+            transform: rotate(20deg);
+        }
+        
+        .loading-spinner {
+            text-align: center;
+            padding: 20px;
+            display: none;
+        }
+        
+        .spinner-border {
+            border-color: #4f46e5;
+            border-right-color: transparent;
+        }
+        
+        .badge-vibers {
+            background: linear-gradient(135deg, #4f46e5, #7c3aed);
+            color: white;
+            padding: 0.25rem 0.75rem;
+            border-radius: 12px;
+            font-size: 0.85rem;
+            animation: pulse 2s infinite;
+        }
+        
+        .follow-btn {
+            transition: all 0.3s;
+        }
+        
+        .follow-btn:hover {
+            transform: scale(1.05);
+        }
     </style>
 </head>
 <body>
@@ -188,8 +482,14 @@ templates = {
             <a class="navbar-brand fw-bold" href="{{ url_for('index') }}"><i class="bi bi-droplet-fill"></i> Fontan</a>
             <div class="d-flex gap-3 align-items-center">
                 {% if current_user.is_authenticated %}
+                    <span class="theme-toggle text-white" onclick="toggleTheme()">
+                        <i class="bi bi-moon-stars-fill" id="theme-icon"></i>
+                    </span>
                     <a class="nav-link text-white fs-5" href="{{ url_for('messenger') }}"><i class="bi bi-chat-fill"></i></a>
                     <a class="nav-link text-white fs-5" href="{{ url_for('friends_requests') }}"><i class="bi bi-people-fill"></i></a>
+                    <a class="nav-link text-white fs-5" href="{{ url_for('my_vibers') }}">
+                        <i class="bi bi-heart-fill"></i>
+                    </a>
                     <a class="nav-link text-white fs-5" href="{{ url_for('settings') }}"><i class="bi bi-gear-fill"></i></a>
                     <a class="nav-link text-white fs-5" href="{{ url_for('profile', username=current_user.username) }}">
                           <div class="avatar" style="width: 30px; height: 30px;">
@@ -214,7 +514,33 @@ templates = {
         {% endwith %}
         {% block content %}{% endblock %}
     </div>
+    
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        function toggleTheme() {
+            fetch('/toggle_theme', { method: 'POST' })
+                .then(r => r.json())
+                .then(data => {
+                    document.documentElement.setAttribute('data-theme', data.theme);
+                    updateThemeIcon(data.theme);
+                });
+        }
+        
+        function updateThemeIcon(theme) {
+            const icon = document.getElementById('theme-icon');
+            if (theme === 'dark') {
+                icon.className = 'bi bi-sun-fill';
+            } else {
+                icon.className = 'bi bi-moon-stars-fill';
+            }
+        }
+        
+        // Инициализация иконки при загрузке
+        document.addEventListener('DOMContentLoaded', function() {
+            const theme = document.documentElement.getAttribute('data-theme');
+            updateThemeIcon(theme);
+        });
+    </script>
 </body>
 </html>
     """,
@@ -230,7 +556,7 @@ templates = {
                     {% if current_user.avatar %}
                         <img src="{{ current_user.avatar }}" style="width:100px; height:100px; border-radius:50%;">
                     {% else %}
-                        <div style="width:100px; height:100px; border-radius:50%; background:#ccc; line-height:100px; font-size:40px; margin:0 auto;">
+                        <div style="width:100px; height:100px; border-radius:50%; background:var(--hover-bg); line-height:100px; font-size:40px; margin:0 auto;">
                         {{ current_user.username[0].upper() }}
                         </div>
                     {% endif %}
@@ -240,115 +566,134 @@ templates = {
                     {% if current_user.is_verified %}<i class="bi bi-patch-check-fill verified-icon"></i>{% endif %}
                 </h5>
                 {% if current_user.is_admin %}<span class="badge bg-danger">ADMIN</span>{% endif %}
+                <div class="mt-2">
+                    <span class="badge-vibers">
+                        <i class="bi bi-heart-fill"></i> {{ current_user.followers.count() }} вайберов
+                    </span>
+                </div>
             </div>
             <hr>
             <a href="{{ url_for('users_list') }}" class="btn btn-outline-primary w-100 mb-2 rounded-pill">Найти людей</a>
             <a href="{{ url_for('friends_requests') }}" class="btn btn-outline-success w-100 mb-2 rounded-pill">Запросы в друзья</a>
+            <a href="{{ url_for('my_vibers') }}" class="btn btn-outline-info w-100 mb-2 rounded-pill">
+                <i class="bi bi-heart-fill"></i> Мои вайберы
+            </a>
         </div>
     </div>
 
     <div class="col-md-6">
         <div class="card p-3">
-            <form method="POST" action="{{ url_for('create_post') }}" enctype="multipart/form-data">
+            <form method="POST" action="{{ url_for('create_post') }}" enctype="multipart/form-data" id="create-post-form">
                 <textarea name="content" class="form-control border-0 bg-light rounded-3 p-3" placeholder="Что нового?" rows="3"></textarea>
+                
+                <div id="poll-section" style="display: none;" class="mt-3 p-3 bg-light rounded-3">
+                    <input type="text" name="poll_question" class="form-control mb-2" placeholder="Вопрос опроса" id="poll-question">
+                    <div id="poll-options">
+                        <input type="text" name="poll_option_1" class="form-control mb-2" placeholder="Вариант 1">
+                        <input type="text" name="poll_option_2" class="form-control mb-2" placeholder="Вариант 2">
+                    </div>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="addPollOption()">+ Добавить вариант</button>
+                </div>
+                
                 <div class="mt-3 d-flex justify-content-between align-items-center">
-                    <label class="btn btn-light text-primary rounded-pill">
-                        <i class="bi bi-camera-fill"></i> Медиа
-                        <input type="file" name="media" hidden accept="image/*,video/*">
-                    </label>
+                    <div class="d-flex gap-2">
+                        <label class="btn btn-light text-primary rounded-pill">
+                            <i class="bi bi-camera-fill"></i> Медиа
+                            <input type="file" name="media" hidden accept="image/*,video/*">
+                        </label>
+                        <button type="button" class="btn btn-light text-success rounded-pill" onclick="togglePoll()">
+                            <i class="bi bi-bar-chart-fill"></i> Опрос
+                        </button>
+                    </div>
                     <button type="submit" class="btn btn-primary rounded-pill px-4">Пост</button>
                 </div>
             </form>
         </div>
 
-        {% for post in posts %}
-        <div class="card p-3">
-            <div class="d-flex justify-content-between align-items-start">
-                <div class="d-flex align-items-center">
-                    <a href="{{ url_for('profile', username=post.author.username) }}" class="text-decoration-none">
-                        <div class="avatar me-2">
-                            {% if post.author.avatar %}
-                                <img src="{{ post.author.avatar }}">
-                            {% else %}
-                                {{ post.author.username[0].upper() }}
-                            {% endif %}
-                        </div>
-                    </a>
-                    <div>
-                        <a href="{{ url_for('profile', username=post.author.username) }}" class="fw-bold text-dark text-decoration-none">
-                            {{ post.author.username }}
-                            {% if post.author.is_verified %}<i class="bi bi-patch-check-fill verified-icon"></i>{% endif %}
-                        </a>
-                        <div class="text-muted small" style="font-size: 0.75rem;">{{ post.timestamp.strftime('%d.%m %H:%M') }}</div>
-                    </div>
-                </div>
-                {% if post.author.id == current_user.id or current_user.is_admin %}
-                <a class="text-danger" href="{{ url_for('delete_post', post_id=post.id) }}"><i class="bi bi-trash"></i></a>
-                {% endif %}
-            </div>
-            
-            <div class="mt-2">
-                {% if post.content %}<p class="card-text fs-6">{{ post.content }}</p>{% endif %}
-                {% if post.image_filename %}
-                    <img src="{{ post.image_filename }}" class="img-fluid rounded">
-                {% endif %}
-                {% if post.video_filename %}
-                    <video controls class="img-fluid rounded"><source src="{{ post.video_filename }}"></video>
-                {% endif %}
-            </div>
-
-            <div class="d-flex align-items-center justify-content-between mt-3 pt-2 border-top">
-                <div class="d-flex gap-4">
-                    <form action="{{ url_for('like_post', post_id=post.id) }}" method="POST">
-                        <button class="btn p-0 text-secondary d-flex align-items-center gap-1">
-                            <i class="bi {% if current_user.id in post.likes_rel|map(attribute='user_id')|list %}bi-heart-fill text-danger{% else %}bi-heart{% endif %} fs-5"></i>
-                            <span>{{ post.likes_rel|length }}</span>
-                        </button>
-                    </form>
-                    <div class="text-secondary d-flex align-items-center gap-1">
-                        <i class="bi bi-chat fs-5"></i> <span>{{ post.comments_rel|length }}</span>
-                    </div>
-                </div>
-                <div class="text-muted small"><i class="bi bi-eye"></i> {{ post.views }}</div>
-            </div>
-
-            <div class="mt-3 bg-light p-2 rounded-3">
-                {% for comment in post.comments_rel %}
-                <div class="mb-2 border-bottom pb-1">
-                    <div class="d-flex justify-content-between">
-                         <small>
-                             <b>{{ comment.author.username }}</b>
-                             {% if comment.author.is_verified %}<i class="bi bi-patch-check-fill verified-icon" style="font-size: 10px;"></i>{% endif %}
-                             :
-                         </small>
-                         {% if comment.user_id == current_user.id or post.user_id == current_user.id or current_user.is_admin %}
-                            <a href="{{ url_for('delete_comment', comment_id=comment.id) }}" class="text-danger small" style="text-decoration:none;">×</a>
-                         {% endif %}
-                    </div>
-                    {% if comment.text %}<div class="small">{{ comment.text }}</div>{% endif %}
-                    {% if comment.voice_filename %}
-                        <audio controls style="height: 30px; width: 200px;" class="mt-1">
-                            <source src="{{ comment.voice_filename }}">
-                        </audio>
-                    {% endif %}
-                </div>
-                {% endfor %}
-                <div class="mt-2">
-                      <form action="{{ url_for('add_comment', post_id=post.id) }}" method="POST" class="d-flex gap-1 align-items-center">
-                        <input type="text" name="text" class="form-control form-control-sm rounded-pill" placeholder="Комментарий...">
-                        <button type="button" class="btn btn-sm btn-danger btn-record-comment rounded-circle" data-post-id="{{ post.id }}"><i class="bi bi-mic-fill"></i></button>
-                        <button type="submit" class="btn btn-sm btn-primary rounded-circle"><i class="bi bi-send-fill"></i></button>
-                      </form>
-                </div>
+        <div id="posts-container">
+            {% for post in posts %}
+            {% include 'post_card.html' %}
+            {% endfor %}
+        </div>
+        
+        <div class="loading-spinner" id="loading-spinner">
+            <div class="spinner-border" role="status">
+                <span class="visually-hidden">Загрузка...</span>
             </div>
         </div>
-        {% else %}
-        <div class="text-center py-5 text-muted"><p>Лента пуста.</p></div>
-        {% endfor %}
+        
+        {% if not posts %}
+        <div class="text-center py-5 text-muted"><p>Лента пуста. Подпишитесь на кого-нибудь!</p></div>
+        {% endif %}
     </div>
 </div>
 
 <script>
+let pollOptionCount = 2;
+let isLoading = false;
+let currentPage = 1;
+let hasMore = true;
+
+function togglePoll() {
+    const pollSection = document.getElementById('poll-section');
+    pollSection.style.display = pollSection.style.display === 'none' ? 'block' : 'none';
+}
+
+function addPollOption() {
+    pollOptionCount++;
+    if (pollOptionCount <= 6) {
+        const optionsDiv = document.getElementById('poll-options');
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.name = `poll_option_${pollOptionCount}`;
+        input.className = 'form-control mb-2';
+        input.placeholder = `Вариант ${pollOptionCount}`;
+        optionsDiv.appendChild(input);
+    }
+}
+
+// Ленивая подгрузка постов
+window.addEventListener('scroll', function() {
+    if (isLoading || !hasMore) return;
+    
+    const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+    const scrollHeight = document.documentElement.scrollHeight;
+    const clientHeight = document.documentElement.clientHeight;
+    
+    if (scrollTop + clientHeight >= scrollHeight - 500) {
+        loadMorePosts();
+    }
+});
+
+function loadMorePosts() {
+    isLoading = true;
+    document.getElementById('loading-spinner').style.display = 'block';
+    currentPage++;
+    
+    fetch(`/api/load_posts?page=${currentPage}`)
+        .then(r => r.json())
+        .then(data => {
+            document.getElementById('loading-spinner').style.display = 'none';
+            
+            if (data.posts && data.posts.length > 0) {
+                const container = document.getElementById('posts-container');
+                data.posts.forEach(postHtml => {
+                    const div = document.createElement('div');
+                    div.innerHTML = postHtml;
+                    container.appendChild(div.firstElementChild);
+                });
+                isLoading = false;
+            } else {
+                hasMore = false;
+            }
+        })
+        .catch(err => {
+            console.error(err);
+            isLoading = false;
+            document.getElementById('loading-spinner').style.display = 'none';
+        });
+}
+
 document.querySelectorAll('.btn-record-comment').forEach(btn => {
     let mediaRecorder;
     let audioChunks = [];
@@ -381,7 +726,177 @@ document.querySelectorAll('.btn-record-comment').forEach(btn => {
         }
     });
 });
+
+function votePoll(pollId, optionIndex) {
+    fetch(`/vote_poll/${pollId}/${optionIndex}`, { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                location.reload();
+            } else {
+                alert(data.error || 'Ошибка голосования');
+            }
+        });
+}
 </script>
+{% endblock %}
+    """,
+
+    'post_card.html': """
+<div class="card p-3">
+    <div class="d-flex justify-content-between align-items-start">
+        <div class="d-flex align-items-center">
+            <a href="{{ url_for('profile', username=post.author.username) }}" class="text-decoration-none">
+                <div class="avatar me-2">
+                    {% if post.author.avatar %}
+                        <img src="{{ post.author.avatar }}">
+                    {% else %}
+                        {{ post.author.username[0].upper() }}
+                    {% endif %}
+                </div>
+            </a>
+            <div>
+                <a href="{{ url_for('profile', username=post.author.username) }}" class="fw-bold text-decoration-none" style="color: var(--text-color);">
+                    {{ post.author.username }}
+                    {% if post.author.is_verified %}<i class="bi bi-patch-check-fill verified-icon"></i>{% endif %}
+                </a>
+                <div class="text-muted small" style="font-size: 0.75rem;">{{ post.timestamp|time_ago }}</div>
+            </div>
+        </div>
+        {% if post.author.id == current_user.id or current_user.is_admin %}
+        <a class="text-danger" href="{{ url_for('delete_post', post_id=post.id) }}"><i class="bi bi-trash"></i></a>
+        {% endif %}
+    </div>
+    
+    {% if not post.is_moderated %}
+    <div class="alert alert-warning mt-2 mb-2">
+        <i class="bi bi-exclamation-triangle-fill"></i> Пост заблокирован модерацией: {{ post.moderation_reason }}
+    </div>
+    {% endif %}
+    
+    <div class="mt-2">
+        {% if post.content %}<p class="card-text fs-6">{{ post.content }}</p>{% endif %}
+        {% if post.image_filename %}
+            <img src="{{ post.image_filename }}" class="post-media img-fluid rounded">
+        {% endif %}
+        {% if post.video_filename %}
+            <video controls class="post-media img-fluid rounded"><source src="{{ post.video_filename }}"></video>
+        {% endif %}
+        
+        {% if post.poll %}
+        <div class="mt-3 p-3 bg-light rounded-3">
+            <h6 class="mb-3"><i class="bi bi-bar-chart-fill"></i> {{ post.poll.question }}</h6>
+            {% set poll_data = post.poll.votes|from_json %}
+            {% set total_votes = poll_data.values()|sum %}
+            {% set user_voted = current_user.id|string in poll_data.keys() %}
+            
+            {% for option in post.poll.options|from_json %}
+            {% set option_votes = poll_data.get(loop.index0|string, 0) %}
+            {% set percentage = (option_votes / total_votes * 100) if total_votes > 0 else 0 %}
+            
+            <div class="poll-option mb-2 p-2 border rounded position-relative" 
+                 {% if not user_voted %}onclick="votePoll({{ post.poll.id }}, {{ loop.index0 }})"{% endif %}>
+                <div class="poll-bar position-absolute top-0 start-0 h-100" style="width: {{ percentage }}%; opacity: 0.2;"></div>
+                <div class="position-relative d-flex justify-content-between align-items-center">
+                    <span>{{ option }}</span>
+                    <span class="badge bg-primary">{{ percentage|round(1) }}% ({{ option_votes }})</span>
+                </div>
+            </div>
+            {% endfor %}
+            
+            <small class="text-muted">Всего голосов: {{ total_votes }}</small>
+        </div>
+        {% endif %}
+    </div>
+
+    <div class="d-flex align-items-center justify-content-between mt-3 pt-2 border-top">
+        <div class="d-flex gap-4">
+            <form action="{{ url_for('like_post', post_id=post.id) }}" method="POST">
+                <button class="btn p-0 text-secondary d-flex align-items-center gap-1">
+                    <i class="bi {% if current_user.id in post.likes_rel|map(attribute='user_id')|list %}bi-heart-fill text-danger{% else %}bi-heart{% endif %} fs-5"></i>
+                    <span>{{ post.likes_rel|length }}</span>
+                </button>
+            </form>
+            <div class="text-secondary d-flex align-items-center gap-1">
+                <i class="bi bi-chat fs-5"></i> <span>{{ post.comments_rel|length }}</span>
+            </div>
+        </div>
+        <div class="text-muted small"><i class="bi bi-eye"></i> {{ post.views }}</div>
+    </div>
+
+    <div class="mt-3 bg-light p-2 rounded-3">
+        {% for comment in post.comments_rel %}
+        <div class="mb-2 border-bottom pb-1">
+            <div class="d-flex justify-content-between">
+                 <small>
+                     <b>{{ comment.author.username }}</b>
+                     {% if comment.author.is_verified %}<i class="bi bi-patch-check-fill verified-icon" style="font-size: 10px;"></i>{% endif %}
+                     :
+                 </small>
+                 {% if comment.user_id == current_user.id or post.user_id == current_user.id or current_user.is_admin %}
+                    <a href="{{ url_for('delete_comment', comment_id=comment.id) }}" class="text-danger small" style="text-decoration:none;">×</a>
+                 {% endif %}
+            </div>
+            {% if comment.text %}<div class="small">{{ comment.text }}</div>{% endif %}
+            {% if comment.voice_filename %}
+                <audio controls style="height: 30px; width: 200px;" class="mt-1">
+                    <source src="{{ comment.voice_filename }}">
+                </audio>
+            {% endif %}
+        </div>
+        {% endfor %}
+        <div class="mt-2">
+              <form action="{{ url_for('add_comment', post_id=post.id) }}" method="POST" class="d-flex gap-1 align-items-center">
+                <input type="text" name="text" class="form-control form-control-sm rounded-pill" placeholder="Комментарий...">
+                <button type="button" class="btn btn-sm btn-danger btn-record-comment rounded-circle" data-post-id="{{ post.id }}"><i class="bi bi-mic-fill"></i></button>
+                <button type="submit" class="btn btn-sm btn-primary rounded-circle"><i class="bi bi-send-fill"></i></button>
+              </form>
+        </div>
+    </div>
+</div>
+    """,
+
+    'my_vibers.html': """
+{% extends "base.html" %}
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <h3 class="mb-4">
+            <i class="bi bi-heart-fill text-danger"></i> Мои вайберы
+            <span class="badge-vibers ms-2">{{ followers|length }}</span>
+        </h3>
+        
+        {% if followers %}
+            {% for follower in followers %}
+            <div class="card p-3 mb-2 d-flex flex-row justify-content-between align-items-center">
+                <div class="d-flex align-items-center">
+                    <div class="avatar me-3">
+                        {% if follower.avatar %}
+                            <img src="{{ follower.avatar }}">
+                        {% else %}
+                            {{ follower.username[0].upper() }}
+                        {% endif %}
+                    </div>
+                    <div>
+                        <h5 class="mb-0">
+                            {{ follower.username }}
+                            {% if follower.is_verified %}<i class="bi bi-patch-check-fill verified-icon"></i>{% endif %}
+                        </h5>
+                        <small class="text-muted">{{ follower.bio }}</small>
+                    </div>
+                </div>
+                <div>
+                    <a href="{{ url_for('profile', username=follower.username) }}" class="btn btn-primary btn-sm rounded-pill">Профиль</a>
+                </div>
+            </div>
+            {% endfor %}
+        {% else %}
+            <div class="alert alert-light text-center">
+                <i class="bi bi-emoji-frown"></i> У вас пока нет вайберов
+            </div>
+        {% endif %}
+    </div>
+</div>
 {% endblock %}
     """,
 
@@ -423,7 +938,7 @@ document.querySelectorAll('.btn-record-comment').forEach(btn => {
 {% block content %}
 <div class="card" style="height: 85vh; overflow: hidden;">
     <div class="row g-0 h-100">
-        <div class="col-md-4 border-end h-100 d-flex flex-column bg-light">
+        <div class="col-md-4 border-end h-100 d-flex flex-column" style="background-color: var(--hover-bg);">
             <div class="p-3 border-bottom d-flex justify-content-between align-items-center">
                 <h5 class="mb-0 fw-bold">Чаты</h5>
                 <button class="btn btn-sm btn-outline-primary rounded-pill" data-bs-toggle="modal" data-bs-target="#createGroupModal">+ Группа</button>
@@ -431,7 +946,7 @@ document.querySelectorAll('.btn-record-comment').forEach(btn => {
             <div class="overflow-auto flex-grow-1">
                 <div class="p-2 text-uppercase text-muted small fw-bold">Личные</div>
                 {% for friend in friends %}
-                <a href="{{ url_for('messenger', type='private', chat_id=friend.id) }}" class="d-flex align-items-center p-3 text-decoration-none text-dark border-bottom bg-white hover-shadow">
+                <a href="{{ url_for('messenger', type='private', chat_id=friend.id) }}" class="d-flex align-items-center p-3 text-decoration-none border-bottom hover-shadow" style="color: var(--text-color); background-color: var(--card-bg);">
                     <div class="avatar me-3">
                         {% if friend.avatar %}
                             <img src="{{ friend.avatar }}">
@@ -446,7 +961,7 @@ document.querySelectorAll('.btn-record-comment').forEach(btn => {
                 {% endfor %}
                 <div class="p-2 text-uppercase text-muted small fw-bold mt-2">Группы</div>
                 {% for group in groups %}
-                <a href="{{ url_for('messenger', type='group', chat_id=group.id) }}" class="d-flex align-items-center p-3 text-decoration-none text-dark border-bottom bg-white hover-shadow">
+                <a href="{{ url_for('messenger', type='group', chat_id=group.id) }}" class="d-flex align-items-center p-3 text-decoration-none border-bottom hover-shadow" style="color: var(--text-color); background-color: var(--card-bg);">
                     <div class="avatar me-3 bg-info text-white">
                         <i class="bi bi-people-fill"></i>
                     </div>
@@ -458,7 +973,7 @@ document.querySelectorAll('.btn-record-comment').forEach(btn => {
             </div>
         </div>
 
-        <div class="col-md-8 h-100 d-flex flex-column bg-white position-relative">
+        <div class="col-md-8 h-100 d-flex flex-column position-relative" style="background-color: var(--card-bg);">
             {% if active_chat %}
                 <div class="p-3 border-bottom d-flex align-items-center justify-content-between shadow-sm" style="z-index: 10;">
                     <div class="d-flex align-items-center">
@@ -472,7 +987,7 @@ document.querySelectorAll('.btn-record-comment').forEach(btn => {
                     </div>
                 </div>
                 <div class="flex-grow-1 p-4 overflow-auto d-flex flex-column" id="chat-box"></div>
-                <div class="p-3 border-top bg-light">
+                <div class="p-3 border-top" style="background-color: var(--hover-bg);">
                     <div class="d-flex gap-2 align-items-center">
                         <input type="hidden" id="chat_type" value="{{ chat_type }}">
                         <input type="hidden" id="chat_id" value="{{ active_chat.id }}">
@@ -617,7 +1132,11 @@ document.querySelectorAll('.btn-record-comment').forEach(btn => {
 <div class="card-body position-relative pt-0 pb-4"> 
 <div class="position-absolute start-0 ms-4" style="top: -60px;"> 
 <div class="avatar avatar-xl"> 
-{% if user.avatar %} <img src="{{ user.avatar }}"> {% else %} {{ user.username[0].upper() }} {% endif %} 
+{% if user.avatar %} <img src="{{ user.avatar }}" style="width: 120px; height: 120px; border-radius: 50%;"> {% else %} 
+<div style="width: 120px; height: 120px; border-radius: 50%; background: var(--hover-bg); line-height: 120px; font-size: 50px;">
+{{ user.username[0].upper() }}
+</div>
+{% endif %} 
 </div> 
 </div> 
 <div class="mt-5 pt-2 ms-2 d-flex justify-content-between align-items-start"> 
@@ -626,19 +1145,44 @@ document.querySelectorAll('.btn-record-comment').forEach(btn => {
     {{ user.username }}
     {% if user.is_verified %}<i class="bi bi-patch-check-fill verified-icon"></i>{% endif %}
 </h2> 
-<p class="text-muted mb-2">{{ user.bio }}</p> 
+<p class="text-muted mb-2">{{ user.bio }}</p>
+<div class="d-flex gap-3 mb-2">
+    <span class="badge-vibers">
+        <i class="bi bi-heart-fill"></i> {{ user.followers.count() }} вайберов
+    </span>
+    <span class="badge bg-secondary">
+        {{ user.following.count() }} подписок
+    </span>
+</div>
 </div> 
 <div class="d-flex gap-2 flex-wrap"> 
 {% if current_user.id != user.id %} 
+    {% set is_following = namespace(value=False) %}
+    {% for follow in user.followers.all() %}
+        {% if follow.follower_id == current_user.id %}
+            {% set is_following.value = True %}
+        {% endif %}
+    {% endfor %}
+    
+    {% if is_following.value %}
+        <a href="{{ url_for('unfollow_user', user_id=user.id) }}" class="btn btn-outline-danger rounded-pill follow-btn px-4">
+            <i class="bi bi-heart-fill"></i> Отписаться
+        </a>
+    {% else %}
+        <a href="{{ url_for('follow_user', user_id=user.id) }}" class="btn btn-primary rounded-pill follow-btn px-4">
+            <i class="bi bi-heart"></i> Вайбнуться
+        </a>
+    {% endif %}
+
     {% if friendship_status == 'accepted' %} 
-    <a href="{{ url_for('messenger', type='private', chat_id=user.id) }}" class="btn btn-primary rounded-pill px-4">Сообщение</a> 
-    <a href="{{ url_for('remove_friend', user_id=user.id) }}" class="btn btn-outline-danger rounded-pill">Удалить</a> 
+    <a href="{{ url_for('messenger', type='private', chat_id=user.id) }}" class="btn btn-success rounded-pill px-4">Сообщение</a> 
+    <a href="{{ url_for('remove_friend', user_id=user.id) }}" class="btn btn-outline-danger rounded-pill">Удалить из друзей</a> 
     {% elif friendship_status == 'pending_sent' %} 
     <button class="btn btn-secondary rounded-pill px-4" disabled>Запрос отправлен</button> 
     {% elif friendship_status == 'pending_received' %} 
     <a href="{{ url_for('accept_friend', user_id=user.id) }}" class="btn btn-success rounded-pill px-4">Принять</a> 
     {% else %} 
-    <a href="{{ url_for('add_friend', user_id=user.id) }}" class="btn btn-primary rounded-pill px-4">Добавить в друзья</a> 
+    <a href="{{ url_for('add_friend', user_id=user.id) }}" class="btn btn-outline-primary rounded-pill px-4">Добавить в друзья</a> 
     {% endif %} 
 
     {% if current_user.is_admin %}
@@ -661,25 +1205,91 @@ document.querySelectorAll('.btn-record-comment').forEach(btn => {
 <div class="col-md-8 mx-auto"> 
 <h5 class="mb-3 ps-2">Публикации</h5> 
 {% for post in posts %} 
-<div class="card p-3"> 
-<div class="d-flex justify-content-between"> 
-<div class="text-muted small">{{ post.timestamp.strftime('%d.%m %H:%M') }}</div> 
-{% if post.author.id == current_user.id or current_user.is_admin %} 
-<a href="{{ url_for('delete_post', post_id=post.id) }}" class="text-danger small text-decoration-none">Удалить</a> 
-{% endif %} 
-</div> 
-<p class="mt-2">{{ post.content }}</p> 
-{% if post.image_filename %} <img src="{{ post.image_filename }}" class="post-media img-fluid rounded"> {% endif %} 
-</div> 
+{% include 'post_card.html' %}
 {% endfor %} 
 </div> 
 </div> 
 {% endblock %}
 """,
-    'settings.html': """{% extends "base.html" %} {% block content %} <div class="row justify-content-center"><div class="col-md-6"><div class="card p-4"><h3 class="mb-4">Настройки</h3><form action="{{ url_for('update_settings') }}" method="POST" enctype="multipart/form-data"><div class="mb-4 text-center">{% if current_user.avatar %}<div class="avatar avatar-xl mx-auto mb-3"><img src="{{ current_user.avatar }}"></div>{% else %}<div class="avatar avatar-xl mx-auto mb-3">{{ current_user.username[0].upper() }}</div>{% endif %}<label class="btn btn-sm btn-outline-primary rounded-pill">Изменить фото <input type="file" name="avatar" hidden accept="image/*"></label></div><div class="mb-3"><label class="form-label text-muted small">Никнейм</label><input type="text" name="username" class="form-control" value="{{ current_user.username }}"></div><div class="mb-4"><label class="form-label text-muted small">Описание</label><textarea name="bio" class="form-control" rows="3">{{ current_user.bio }}</textarea></div><button type="submit" class="btn btn-primary w-100 py-2 rounded-pill">Сохранить</button></form></div></div></div> {% endblock %}""",
+    'settings.html': """
+{% extends "base.html" %} 
+{% block content %} 
+<div class="row justify-content-center">
+<div class="col-md-6">
+<div class="card p-4">
+<h3 class="mb-4">Настройки</h3>
+<form action="{{ url_for('update_settings') }}" method="POST" enctype="multipart/form-data">
+<div class="mb-4 text-center">
+{% if current_user.avatar %}
+<div class="avatar avatar-xl mx-auto mb-3">
+    <img src="{{ current_user.avatar }}" style="width: 120px; height: 120px; border-radius: 50%;">
+</div>
+{% else %}
+<div class="avatar avatar-xl mx-auto mb-3" style="width: 120px; height: 120px; line-height: 120px; font-size: 50px;">
+    {{ current_user.username[0].upper() }}
+</div>
+{% endif %}
+<label class="btn btn-sm btn-outline-primary rounded-pill">Изменить фото <input type="file" name="avatar" hidden accept="image/*"></label>
+</div>
+<div class="mb-3">
+<label class="form-label text-muted small">Никнейм</label>
+<input type="text" name="username" class="form-control" value="{{ current_user.username }}">
+</div>
+<div class="mb-4">
+<label class="form-label text-muted small">Описание</label>
+<textarea name="bio" class="form-control" rows="3">{{ current_user.bio }}</textarea>
+</div>
+<div class="mb-4">
+<label class="form-label text-muted small">Тема оформления</label>
+<select name="theme" class="form-select">
+    <option value="light" {% if current_user.theme == 'light' %}selected{% endif %}>☀️ Светлая</option>
+    <option value="dark" {% if current_user.theme == 'dark' %}selected{% endif %}>🌙 Тёмная</option>
+</select>
+</div>
+<button type="submit" class="btn btn-primary w-100 py-2 rounded-pill">Сохранить</button>
+</form>
+</div>
+</div>
+</div> 
+{% endblock %}
+""",
     'auth.html': """{% extends "base.html" %} {% block content %} <div class="row justify-content-center"><div class="col-md-4"><div class="card p-4 mt-5"><h3 class="text-center">{{ title }}</h3><form method="POST">{% if not is_login %}<input type="email" name="email" class="form-control mb-3" placeholder="Email" required>{% endif %}<input type="text" name="username" class="form-control mb-3" placeholder="Ник" required><input type="password" name="password" class="form-control mb-3" placeholder="Пароль" required><button class="btn btn-primary w-100">{{ title }}</button></form><div class="text-center mt-3"><a href="{{ url_for('login' if not is_login else 'register') }}">{{ 'Войти' if not is_login else 'Регистрация' }}</a></div></div></div></div> {% endblock %}""",
-    'users.html': """{% extends "base.html" %} {% block content %} <h3>Поиск людей</h3> <div class="row"> {% for u in users %} {% if u.id != current_user.id and u.username != 'admin' %} <div class="col-md-4 mb-3"><div class="card p-3 d-flex flex-row align-items-center"><div class="avatar me-3">{% if u.avatar %}<img src="{{ u.avatar }}">{% else %}{{ u.username[0].upper() }}{% endif %}</div><div><h5>{{ u.username }} {% if u.is_verified %}<i class="bi bi-patch-check-fill verified-icon"></i>{% endif %}</h5><a href="{{ url_for('profile', username=u.username) }}" class="btn btn-sm btn-outline-primary rounded-pill">Профиль</a></div></div></div> {% endif %} {% endfor %} </div> {% endblock %}"""
+    'users.html': """
+{% extends "base.html" %} 
+{% block content %} 
+<h3 class="mb-4">Поиск людей</h3> 
+<div class="row"> 
+{% for u in users %} 
+{% if u.id != current_user.id and u.username != 'admin' %} 
+<div class="col-md-4 mb-3">
+    <div class="card p-3">
+        <div class="d-flex align-items-center mb-2">
+            <div class="avatar me-3">
+                {% if u.avatar %}
+                    <img src="{{ u.avatar }}">
+                {% else %}
+                    {{ u.username[0].upper() }}
+                {% endif %}
+            </div>
+            <div>
+                <h5 class="mb-0">
+                    {{ u.username }} 
+                    {% if u.is_verified %}<i class="bi bi-patch-check-fill verified-icon"></i>{% endif %}
+                </h5>
+                <small class="text-muted">{{ u.followers.count() }} вайберов</small>
+            </div>
+        </div>
+        <a href="{{ url_for('profile', username=u.username) }}" class="btn btn-sm btn-outline-primary rounded-pill w-100">Профиль</a>
+    </div>
+</div> 
+{% endif %} 
+{% endfor %} 
+</div> 
+{% endblock %}
+"""
 }
+
+app.jinja_env.filters['from_json'] = json.loads
 app.jinja_loader = jinja2.DictLoader(templates)
 
 # --- ROUTES ---
@@ -687,7 +1297,18 @@ app.jinja_loader = jinja2.DictLoader(templates)
 @app.route('/')
 @login_required
 def index():
-    posts = Post.query.order_by(Post.timestamp.desc()).all()
+    # Рекомендательная лента: показываем посты от тех, на кого подписан пользователь
+    following_ids = [f.following_id for f in current_user.following.all()]
+    
+    if following_ids:
+        posts = Post.query.filter(
+            Post.user_id.in_(following_ids),
+            Post.is_moderated == True
+        ).order_by(Post.timestamp.desc()).limit(10).all()
+    else:
+        # Если не на кого не подписан, показываем все посты
+        posts = Post.query.filter_by(is_moderated=True).order_by(Post.timestamp.desc()).limit(10).all()
+    
     for p in posts:
         view = PostView.query.filter_by(user_id=current_user.id, post_id=p.id).first()
         if not view:
@@ -695,6 +1316,36 @@ def index():
             p.views += 1
     db.session.commit()
     return render_template('index.html', posts=posts)
+
+@app.route('/api/load_posts')
+@login_required
+def load_posts_api():
+    """API для ленивой подгрузки постов"""
+    page = request.args.get('page', 1, type=int)
+    per_page = 10
+    
+    following_ids = [f.following_id for f in current_user.following.all()]
+    
+    if following_ids:
+        posts = Post.query.filter(
+            Post.user_id.in_(following_ids),
+            Post.is_moderated == True
+        ).order_by(Post.timestamp.desc()).paginate(page=page, per_page=per_page, error_out=False)
+    else:
+        posts = Post.query.filter_by(is_moderated=True).order_by(Post.timestamp.desc()).paginate(page=page, per_page=per_page, error_out=False)
+    
+    posts_html = []
+    for post in posts.items:
+        # Отмечаем просмотр
+        view = PostView.query.filter_by(user_id=current_user.id, post_id=post.id).first()
+        if not view:
+            db.session.add(PostView(user_id=current_user.id, post_id=post.id))
+            post.views += 1
+        
+        posts_html.append(render_template('post_card.html', post=post))
+    
+    db.session.commit()
+    return jsonify({'posts': posts_html})
 
 @app.route('/profile/<username>')
 @login_required
@@ -712,6 +1363,72 @@ def profile(username):
             elif friendship.sender_id == current_user.id: status = 'pending_sent'
             else: status = 'pending_received'
     return render_template('profile.html', user=user, posts=posts, friendship_status=status)
+
+# --- ВАЙБЕРЫ (ПОДПИСКИ) ---
+@app.route('/follow/<int:user_id>')
+@login_required
+def follow_user(user_id):
+    if user_id == current_user.id:
+        return redirect(request.referrer)
+    
+    existing = Follow.query.filter_by(follower_id=current_user.id, following_id=user_id).first()
+    if not existing:
+        db.session.add(Follow(follower_id=current_user.id, following_id=user_id))
+        db.session.commit()
+        flash("Вы вайбнулись! 💜", "success")
+    
+    return redirect(request.referrer or url_for('index'))
+
+@app.route('/unfollow/<int:user_id>')
+@login_required
+def unfollow_user(user_id):
+    follow = Follow.query.filter_by(follower_id=current_user.id, following_id=user_id).first()
+    if follow:
+        db.session.delete(follow)
+        db.session.commit()
+        flash("Вы отписались", "info")
+    
+    return redirect(request.referrer or url_for('index'))
+
+@app.route('/my_vibers')
+@login_required
+def my_vibers():
+    """Страница с моими подписчиками (вайберами)"""
+    follower_ids = [f.follower_id for f in current_user.followers.all()]
+    followers = User.query.filter(User.id.in_(follower_ids)).all()
+    return render_template('my_vibers.html', followers=followers)
+
+# --- ПЕРЕКЛЮЧЕНИЕ ТЕМЫ ---
+@app.route('/toggle_theme', methods=['POST'])
+@login_required
+def toggle_theme():
+    current_user.theme = 'dark' if current_user.theme == 'light' else 'light'
+    db.session.commit()
+    return jsonify({'theme': current_user.theme})
+
+# --- ГОЛОСОВАНИЕ В ОПРОСАХ ---
+@app.route('/vote_poll/<int:poll_id>/<int:option_index>', methods=['POST'])
+@login_required
+def vote_poll(poll_id, option_index):
+    poll = db.session.get(Poll, poll_id)
+    if not poll:
+        return jsonify({'error': 'Опрос не найден'}), 404
+    
+    # Проверяем, голосовал ли уже
+    existing_vote = PollVote.query.filter_by(poll_id=poll_id, user_id=current_user.id).first()
+    if existing_vote:
+        return jsonify({'error': 'Вы уже голосовали'}), 400
+    
+    # Добавляем голос
+    db.session.add(PollVote(poll_id=poll_id, user_id=current_user.id, option_index=option_index))
+    
+    # Обновляем счётчик
+    votes = json.loads(poll.votes) if poll.votes else {}
+    votes[str(option_index)] = votes.get(str(option_index), 0) + 1
+    poll.votes = json.dumps(votes)
+    
+    db.session.commit()
+    return jsonify({'success': True})
 
 # --- АДМИНСКИЕ ФУНКЦИИ ---
 @app.route('/admin/ban/<int:user_id>')
@@ -798,7 +1515,6 @@ def messenger():
     friends = []
     for f in friends_relations:
         uid = f.receiver_id if f.sender_id == current_user.id else f.sender_id
-        # Не показываем админа в друзьях
         u = db.session.get(User, uid)
         if u.username != 'admin':
             friends.append(u)
@@ -849,7 +1565,6 @@ def get_messages():
 
     result = []
     for m in messages:
-        # voice_filename теперь URL
         result.append({
             'body': m.body,
             'voice_url': m.voice_filename,
@@ -911,6 +1626,7 @@ def settings():
 def update_settings():
     username = request.form.get('username')
     bio = request.form.get('bio')
+    theme = request.form.get('theme')
     file = request.files.get('avatar')
     
     if file and file.filename != '':
@@ -918,6 +1634,8 @@ def update_settings():
         if url: current_user.avatar = url
             
     if bio: current_user.bio = bio
+    if theme and theme in ['light', 'dark']: 
+        current_user.theme = theme
     if username and username != current_user.username:
         if not User.query.filter_by(username=username).first(): current_user.username = username
         else: flash("Ник занят")
@@ -931,23 +1649,65 @@ def create_post():
     file = request.files.get('media')
     image_url, video_url = None, None
     
+    # AI модерация контента
+    is_ok, reason = moderate_content(content)
+    
     if file and file.filename != '':
         ext = file.filename.rsplit('.', 1)[1].lower()
         if ext in ['mp4', 'webm', 'mov']:
             video_url = upload_to_cloud(file, resource_type="video")
         else:
             image_url = upload_to_cloud(file, resource_type="image")
+    
+    # Создание опроса
+    poll_question = request.form.get('poll_question')
+    poll_data = None
+    
+    if poll_question:
+        options = []
+        for i in range(1, 7):
+            opt = request.form.get(f'poll_option_{i}')
+            if opt:
+                options.append(opt)
+        
+        if len(options) >= 2:
+            poll_data = {
+                'question': poll_question,
+                'options': options
+            }
             
-    if content or image_url or video_url:
-        db.session.add(Post(content=content, image_filename=image_url, video_filename=video_url, author=current_user))
+    if content or image_url or video_url or poll_data:
+        post = Post(
+            content=content, 
+            image_filename=image_url, 
+            video_filename=video_url, 
+            author=current_user,
+            is_moderated=is_ok,
+            moderation_reason=reason if not is_ok else None
+        )
+        db.session.add(post)
+        db.session.flush()
+        
+        if poll_data:
+            poll = Poll(
+                post_id=post.id,
+                question=poll_data['question'],
+                options=json.dumps(poll_data['options']),
+                votes=json.dumps({})
+            )
+            db.session.add(poll)
+        
         db.session.commit()
+        
+        if not is_ok:
+            flash(f"⚠️ Ваш пост заблокирован модерацией: {reason}", "warning")
+    
     return redirect(url_for('index'))
 
 @app.route('/delete_post/<int:post_id>')
 @login_required
 def delete_post(post_id):
     post = db.session.get(Post, post_id)
-    # Админ может удалять всё
     if post and (post.author.id == current_user.id or current_user.is_admin):
         db.session.delete(post)
         db.session.commit()
@@ -966,9 +1726,16 @@ def like_post(post_id):
 @login_required
 def add_comment(post_id):
     text = request.form.get('text')
-    if text:
+    
+    # AI модерация комментариев
+    is_ok, reason = moderate_content(text)
+    
+    if text and is_ok:
         db.session.add(Comment(text=text, user_id=current_user.id, post_id=post_id))
         db.session.commit()
+    elif not is_ok:
+        flash(f"⚠️ Комментарий заблокирован: {reason}", "warning")
+    
     return redirect(url_for('index'))
 
 @app.route('/delete_comment/<int:comment_id>')
@@ -1009,8 +1776,11 @@ def logout():
     logout_user()
     return redirect(url_for('login'))
 
-# --- СБРОС И СОЗДАНИЕ БД (ВАЖНО) ---
-def create_admin_user():
+# --- СОЗДАНИЕ ТАБЛИЦ И АДМИНА ---
+with app.app_context():
+    db.create_all()
+    
+    # Создание админа
     admin = User.query.filter_by(username='admin').first()
     if not admin:
         print("Создаю админа...")
@@ -1020,12 +1790,12 @@ def create_admin_user():
             password=generate_password_hash('12we1qtr11'),
             is_admin=True,
             is_verified=True,
-            bio="Главный Администратор"
+            bio="Главный Администратор",
+            theme='dark'
         )
         db.session.add(admin)
         db.session.commit()
         print("Админ создан: admin / 12we1qtr11")
-
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
