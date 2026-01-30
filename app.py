@@ -1780,6 +1780,19 @@ def logout():
 with app.app_context():
     db.create_all()
     
+    # --- ВРЕМЕННЫЙ ФИКС БАЗЫ ДАННЫХ (ЛЕЧЕНИЕ ОШИБКИ) ---
+    # Этот блок добавит недостающие колонки в существующую базу на Render
+    from sqlalchemy import text
+    try:
+        with db.engine.connect() as conn:
+            conn.execute(text("ALTER TABLE posts ADD COLUMN IF NOT EXISTS is_moderated BOOLEAN DEFAULT TRUE;"))
+            conn.execute(text("ALTER TABLE posts ADD COLUMN IF NOT EXISTS moderation_reason VARCHAR(200);"))
+            conn.commit()
+            print(">>> УСПЕШНО: Колонки добавлены в базу данных! <<<")
+    except Exception as e:
+        print(f">>> INFO (не ошибка): {e}")
+    # ---------------------------------------------------
+
     # Создание админа
     admin = User.query.filter_by(username='admin').first()
     if not admin:
@@ -1798,4 +1811,6 @@ with app.app_context():
         print("Админ создан: admin / 12we1qtr11")
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    # Для Render важно использовать host='0.0.0.0' и порт из окружения
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
