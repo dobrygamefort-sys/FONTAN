@@ -10,6 +10,7 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import or_, and_, desc
+from sqlalchemy import text
 import jinja2
 
 # --- НАСТРОЙКИ ПРИЛОЖЕНИЯ ---
@@ -1308,7 +1309,17 @@ def create_admin_user():
         db.session.add(admin)
         db.session.commit()
         print("Админ создан.")
-
+# --- ВРЕМЕННЫЙ РОУТ ДЛЯ РЕМОНТА БАЗЫ ---
+@app.route('/fix_db')
+def fix_db():
+    try:
+        with db.engine.connect() as conn:
+            # Добавляем колонку theme
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS theme VARCHAR(10) DEFAULT 'light';"))
+            conn.commit()
+        return "Успех! Колонка 'theme' добавлена. Теперь можно входить."
+    except Exception as e:
+        return f"Ошибка при обновлении базы: {e}"
 if __name__ == '__main__':
     with app.app_context():
         # db.drop_all() УБРАНО! База больше не стирается
