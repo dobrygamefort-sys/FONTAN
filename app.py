@@ -9,15 +9,14 @@ from flask import Flask, render_template, redirect, url_for, request, flash, sen
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
-from sqlalchemy import or_, and_, desc
-from sqlalchemy import text
+from sqlalchemy import or_, and_, desc, text  # Added text here
 import jinja2
 
-# --- НАСТРОЙКИ ПРИЛОЖЕНИЯ ---
+# --- APP SETTINGS ---
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'fontan_ultra_combined_v10'
 
-# --- НАСТРОЙКИ CLOUDINARY (Вставлены твои ключи) ---
+# --- CLOUDINARY SETTINGS ---
 cloudinary.config(
     cloud_name = 'daz4839e7', 
     api_key = '371541773313745', 
@@ -25,8 +24,7 @@ cloudinary.config(
     secure = True
 )
 
-# --- НАСТРОЙКА БД (NEON / POSTGRES) ---
-# Используем переменную окружения или твою ссылку по умолчанию
+# --- DATABASE SETTINGS ---
 NEON_DB_URL = os.environ.get('DATABASE_URL')
 if not NEON_DB_URL:
     NEON_DB_URL = 'postgresql://neondb_owner:npg_pIZeE3uY7XLF@ep-shy-field-ahelwpwv-pooler.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require' 
@@ -38,7 +36,7 @@ app.config['SQLALCHEMY_DATABASE_URI'] = NEON_DB_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {"pool_pre_ping": True, "pool_recycle": 300}
 
-# Локальная папка нужна только как временный буфер или для старых файлов
+# Local upload folder (backup)
 UPLOAD_FOLDER = 'uploads'
 if not os.path.exists(UPLOAD_FOLDER):
     try:
@@ -50,10 +48,9 @@ db = SQLAlchemy(app)
 login_manager = LoginManager(app)
 login_manager.login_view = 'login'
 
-# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
+# --- HELPER FUNCTIONS ---
 
 def upload_to_cloud(file_obj, resource_type="auto"):
-    """Загружает файл в Cloudinary и возвращает ссылку"""
     if not file_obj: return None
     try:
         upload_result = cloudinary.uploader.upload(
@@ -63,7 +60,7 @@ def upload_to_cloud(file_obj, resource_type="auto"):
         )
         return upload_result['secure_url']
     except Exception as e:
-        print(f"Ошибка Cloudinary: {e}")
+        print(f"Cloudinary Error: {e}")
         return None
 
 def allowed_file(filename):
@@ -71,7 +68,6 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 def moderate_content(text):
-    """Простая AI модерация"""
     if not text: return True
     bad_words = ['спам', 'реклама', 'казино', 'азарт'] 
     text_lower = text.lower()
@@ -80,7 +76,7 @@ def moderate_content(text):
             return False
     return True
 
-# --- МОДЕЛИ БАЗЫ ДАННЫХ ---
+# --- DATABASE MODELS ---
 
 group_members = db.Table('group_members',
     db.Column('user_id', db.Integer, db.ForeignKey('users.id'), primary_key=True),
@@ -100,10 +96,9 @@ class User(UserMixin, db.Model):
     email = db.Column(db.String(150), unique=True, nullable=False)
     password = db.Column(db.String(200), nullable=False)
     bio = db.Column(db.String(300), default="Я тут новенький!")
-    avatar = db.Column(db.String(300), default=None) # Храним URL Cloudinary
+    avatar = db.Column(db.String(300), default=None)
     theme = db.Column(db.String(10), default='light')
     
-    # Поля админа (из app1)
     is_admin = db.Column(db.Boolean, default=False)
     is_banned = db.Column(db.Boolean, default=False)
     is_verified = db.Column(db.Boolean, default=False)
@@ -138,7 +133,7 @@ class Message(db.Model):
     recipient_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     group_id = db.Column(db.Integer, db.ForeignKey('groups.id'), nullable=True)
     body = db.Column(db.Text, nullable=True)
-    voice_filename = db.Column(db.String(300), nullable=True) # URL
+    voice_filename = db.Column(db.String(300), nullable=True)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
     sender = db.relationship('User', foreign_keys=[sender_id])
 
@@ -158,13 +153,12 @@ class Comment(db.Model):
     __tablename__ = 'comments'
     id = db.Column(db.Integer, primary_key=True)
     text = db.Column(db.String(500), nullable=True)
-    voice_filename = db.Column(db.String(300), nullable=True) # URL
+    voice_filename = db.Column(db.String(300), nullable=True)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     post_id = db.Column(db.Integer, db.ForeignKey('posts.id'), nullable=False)
     author = db.relationship('User', backref='comments')
 
-# Опросы (из app.py)
 class Poll(db.Model):
     __tablename__ = 'polls'
     id = db.Column(db.Integer, primary_key=True)
@@ -188,8 +182,8 @@ class Post(db.Model):
     __tablename__ = 'posts'
     id = db.Column(db.Integer, primary_key=True)
     content = db.Column(db.Text, nullable=True)
-    image_filename = db.Column(db.String(300), nullable=True) # URL
-    video_filename = db.Column(db.String(300), nullable=True) # URL
+    image_filename = db.Column(db.String(300), nullable=True)
+    video_filename = db.Column(db.String(300), nullable=True)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
     views = db.Column(db.Integer, default=0)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
@@ -211,7 +205,7 @@ def check_ban():
         flash("Ваш аккаунт заблокирован администрацией.", "danger")
         return redirect(url_for('login'))
 
-# --- ШАБЛОНЫ (Обновленные: поддержка Cloudinary + Админ кнопки) ---
+# --- TEMPLATES ---
 templates = {
     'base.html': """
 <!DOCTYPE html>
@@ -442,7 +436,6 @@ function createPostHTML(post) {
         `;
     }
     
-    // Определяем аватарку (URL или буква)
     let avatarImg = post.author.avatar ? `<img src="${post.author.avatar}">` : post.author.username[0].toUpperCase();
     
     return `
@@ -515,7 +508,6 @@ window.addEventListener('scroll', () => {
 
 loadPosts();
 
-// Логика записи (с исправлением для Cloudinary)
 document.addEventListener('click', async (e) => {
     if (e.target.closest('.btn-record-comment')) {
         const btn = e.target.closest('.btn-record-comment');
@@ -889,7 +881,7 @@ async function toggleVibe(userId, btn) {
 
 app.jinja_loader = jinja2.DictLoader(templates)
 
-# --- ROUTES (ОБЪЕДИНЕННЫЕ) ---
+# --- ROUTES ---
 
 @app.route('/')
 @login_required
@@ -952,7 +944,6 @@ def get_posts_api():
         })
     return jsonify({'posts': result})
 
-# АДМИНСКИЕ РОУТЫ (ИЗ APP1)
 @app.route('/admin/ban/<int:user_id>')
 @login_required
 def admin_ban_user(user_id):
@@ -1034,7 +1025,6 @@ def profile(username):
     is_vibing = user in current_user.following
     return render_template('profile.html', user=user, posts=posts, friendship_status=status, is_vibing=is_vibing)
 
-# --- ДРУЗЬЯ ---
 @app.route('/add_friend/<int:user_id>')
 @login_required
 def add_friend(user_id):
@@ -1079,7 +1069,6 @@ def friends_requests():
     reqs = [{'user': db.session.get(User, p.sender_id)} for p in pending]
     return render_template('friends.html', requests=reqs)
 
-# --- МЕССЕНДЖЕР (С ОБЛАЧНЫМ ГОЛОСОМ) ---
 @app.route('/messenger')
 @login_required
 def messenger():
@@ -1087,7 +1076,7 @@ def messenger():
     chat_id = request.args.get('chat_id')
     friends_relations = Friendship.query.filter((Friendship.status == 'accepted') & ((Friendship.sender_id == current_user.id) | (Friendship.receiver_id == current_user.id))).all()
     friends = [db.session.get(User, f.receiver_id if f.sender_id == current_user.id else f.sender_id) for f in friends_relations]
-    friends = [u for u in friends if u.username != 'admin'] # Скрываем админа из списка ЛС
+    friends = [u for u in friends if u.username != 'admin']
     groups = current_user.groups
     active_chat = None
     if chat_type == 'private' and chat_id:
@@ -1144,7 +1133,6 @@ def send_api_message():
     db.session.commit()
     return jsonify({'status': 'ok'})
 
-# --- ПОСТЫ И КОММЕНТАРИИ (С CLOUDINARY) ---
 @app.route('/add_voice_comment/<int:post_id>', methods=['POST'])
 @login_required
 def add_voice_comment(post_id):
@@ -1213,7 +1201,7 @@ def create_post():
             poll = Poll(question=poll_question, post_id=post.id)
             db.session.add(poll)
             db.session.flush()
-            for i in range(1, 3): # 2 варианта
+            for i in range(1, 3):
                 option_text = request.form.get(f'poll_option{i}')
                 if option_text: db.session.add(PollOption(text=option_text, poll_id=poll.id))
         
@@ -1294,10 +1282,9 @@ def logout():
     return redirect(url_for('login'))
 
 def create_admin_user():
-    """Создает админа, если его нет"""
     admin = User.query.filter_by(username='admin').first()
     if not admin:
-        print("Создаю админа...")
+        print("Creating admin...")
         admin = User(
             username='admin',
             email='admin@fontan.local',
@@ -1308,21 +1295,26 @@ def create_admin_user():
         )
         db.session.add(admin)
         db.session.commit()
-        print("Админ создан.")
-# --- ВРЕМЕННЫЙ РОУТ ДЛЯ РЕМОНТА БАЗЫ ---
+        print("Admin created.")
+
+# --- DATABASE REPAIR ROUTE ---
 @app.route('/fix_db')
 def fix_db():
     try:
         with db.engine.connect() as conn:
-            # Добавляем колонку theme
+            # 1. Add 'theme' column
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS theme VARCHAR(10) DEFAULT 'light';"))
+            
+            # 2. Add 'poll_id' to polls table if missing (just in case)
+            # You can add more fix commands here if other columns are missing
+            
             conn.commit()
-        return "Успех! Колонка 'theme' добавлена. Теперь можно входить."
+        return "Success! Database schema updated. You can now login."
     except Exception as e:
-        return f"Ошибка при обновлении базы: {e}"
+        return f"Database repair failed: {e}"
+
 if __name__ == '__main__':
     with app.app_context():
-        # db.drop_all() УБРАНО! База больше не стирается
-        db.create_all() # Создаст таблицы только если их нет
-        create_admin_user() # Проверит админа
+        db.create_all()
+        create_admin_user()
     app.run(debug=True, port=5000)
