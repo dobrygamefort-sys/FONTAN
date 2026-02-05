@@ -132,7 +132,9 @@ class User(UserMixin, db.Model):
     is_typing = db.Column(db.Boolean, default=False)
     typing_in_chat = db.Column(db.Integer, nullable=True)  # ID чата где печатает
 
-    posts = db.relationship('Post', backref='author', lazy=True)
+    # --- ИСПРАВЛЕНИЕ: Добавлен foreign_keys для постов ---
+    posts = db.relationship('Post', foreign_keys='Post.user_id', backref='author', lazy=True)
+    
     likes = db.relationship('Like', backref='user', lazy=True)
     groups = db.relationship('Group', secondary=group_members, backref=db.backref('members', lazy='dynamic'))
     
@@ -164,6 +166,7 @@ class Notification(db.Model):
     is_read = db.Column(db.Boolean, default=False)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
     
+    # --- ИСПРАВЛЕНИЕ: Явное указание ключей ---
     user = db.relationship('User', foreign_keys=[user_id], backref='notifications')
     from_user = db.relationship('User', foreign_keys=[from_user_id])
 
@@ -189,8 +192,9 @@ class Report(db.Model):
     status = db.Column(db.String(20), default='pending')  # pending, reviewed, resolved
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
     
+    # --- ИСПРАВЛЕНИЕ: Добавлены foreign_keys ---
     reporter = db.relationship('User', foreign_keys=[reporter_id], backref='reports_sent')
-    reported_user = db.relationship('User', foreign_keys=[reported_user_id])
+    reported_user = db.relationship('User', foreign_keys=[reported_user_id], backref='reports_received')
 
 # НОВОЕ: Активность сеансов
 class UserSession(db.Model):
@@ -271,8 +275,9 @@ class Mention(db.Model):
     mentioner_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
     
+    # --- ИСПРАВЛЕНИЕ: Добавлены foreign_keys ---
     mentioned_user = db.relationship('User', foreign_keys=[mentioned_user_id], backref='mentions_received')
-    mentioner = db.relationship('User', foreign_keys=[mentioner_user_id])
+    mentioner = db.relationship('User', foreign_keys=[mentioner_user_id], backref='mentions_made')
 
 # НОВОЕ: Карусель медиа (несколько фото/видео в одном посте)
 class PostMedia(db.Model):
@@ -349,7 +354,9 @@ class Message(db.Model):
     is_deleted_for_sender = db.Column(db.Boolean, default=False)  # Удалено у меня
     is_deleted_for_all = db.Column(db.Boolean, default=False)  # Удалено у всех
     
-    sender = db.relationship('User', foreign_keys=[sender_id])
+    # --- ИСПРАВЛЕНИЕ: Добавлены foreign_keys ---
+    sender = db.relationship('User', foreign_keys=[sender_id], backref='sent_messages')
+    recipient = db.relationship('User', foreign_keys=[recipient_id], backref='received_messages')
 
 class Like(db.Model):
     __tablename__ = 'likes'
