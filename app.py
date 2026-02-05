@@ -1705,6 +1705,31 @@ def toggle_theme():
     return jsonify({'theme': current_user.theme})
 
 # --- ГЛАВНАЯ СТРАНИЦА (УМНАЯ ЛЕНТА) ---
+    @app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+        captcha_input = request.form.get('captcha')
+
+        if captcha_input != session.get('captcha'):
+            flash("Неверная капча", "danger")
+            return redirect(url_for('login'))
+
+        user = User.query.filter_by(username=username).first()
+        if user and check_password_hash(user.password, password):
+            if user.is_banned:
+                flash("Вы забанены.", "danger")
+            else:
+                login_user(user)
+                return redirect(url_for('index'))
+        flash("Неверный логин или пароль", "danger")
+
+    # капча для GET-запроса
+    captcha = generate_captcha()
+    session['captcha'] = captcha
+
+    return render_template('auth.html', title="Вход", is_login=True, captcha=captcha)
 @app.route('/')
 @login_required
 def index():
