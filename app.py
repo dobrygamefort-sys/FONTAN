@@ -1705,7 +1705,7 @@ def toggle_theme():
     return jsonify({'theme': current_user.theme})
 
 # --- ГЛАВНАЯ СТРАНИЦА (УМНАЯ ЛЕНТА) ---
-    @app.route('/login', methods=['GET', 'POST'])
+@app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
         username = request.form.get('username')
