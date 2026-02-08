@@ -126,7 +126,7 @@ class User(UserMixin, db.Model):
     is_banned = db.Column(db.Boolean, default=False)
     is_verified = db.Column(db.Boolean, default=False)
 
-    posts = db.relationship('Post', backref='author', lazy=True)
+    posts = db.relationship('Post', backref='author', lazy=True, foreign_keys='Post.user_id')
     likes = db.relationship('Like', backref='user', lazy=True)
     groups = db.relationship('Group', secondary=group_members, backref=db.backref('members', lazy='dynamic'))
     
