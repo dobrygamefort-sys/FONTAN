@@ -301,16 +301,26 @@ class UserSession(db.Model):
     last_seen = db.Column(db.DateTime, default=datetime.utcnow)
     is_active = db.Column(db.Boolean, default=True)
 
+
 def ensure_user_sessions_schema():
     try:
         with app.app_context():
+            # Исправляем user_sessions (ошибка с IP)
             db.session.execute(text("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS ip VARCHAR(64)"))
             db.session.execute(text("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS city VARCHAR(100)"))
             db.session.execute(text("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS user_agent VARCHAR(300)"))
             db.session.execute(text("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS created_at TIMESTAMP"))
             db.session.execute(text("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS last_seen TIMESTAMP"))
             db.session.execute(text("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE"))
+            
+            # Исправляем notifications (ошибка с ntype)
+            db.session.execute(text("ALTER TABLE notifications ADD COLUMN IF NOT EXISTS ntype VARCHAR(50) DEFAULT 'system'"))
+            
+            # Исправляем stories (ошибка с created_at)
+            db.session.execute(text("ALTER TABLE stories ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"))
+
             db.session.commit()
+            print(">>> Схема базы данных успешно обновлена! <<<")
     except Exception as e:
         print(f"Schema check failed: {e}")
         db.session.rollback()
