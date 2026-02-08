@@ -306,7 +306,7 @@ def ensure_user_sessions_schema():
     from sqlalchemy import text
     try:
         with app.app_context():
-            # 1. Исправляем user_sessions
+            # 1. Таблица user_sessions
             db.session.execute(text("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS ip VARCHAR(64)"))
             db.session.execute(text("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS city VARCHAR(100)"))
             db.session.execute(text("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS user_agent VARCHAR(300)"))
@@ -314,21 +314,28 @@ def ensure_user_sessions_schema():
             db.session.execute(text("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS last_seen TIMESTAMP"))
             db.session.execute(text("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE"))
             
-            # 2. Исправляем notifications (ВАЖНО: добавляем link и from_user_id)
+            # 2. Таблица notifications
             db.session.execute(text("ALTER TABLE notifications ADD COLUMN IF NOT EXISTS ntype VARCHAR(50) DEFAULT 'system'"))
             db.session.execute(text("ALTER TABLE notifications ADD COLUMN IF NOT EXISTS link VARCHAR(500)"))
             db.session.execute(text("ALTER TABLE notifications ADD COLUMN IF NOT EXISTS from_user_id INTEGER"))
             
-            # 3. Исправляем stories
+            # 3. Таблица stories
             db.session.execute(text("ALTER TABLE stories ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"))
             db.session.execute(text("ALTER TABLE stories ADD COLUMN IF NOT EXISTS media_type VARCHAR(50) DEFAULT 'image'"))
 
-            # 4. Исправляем messages (на всякий случай)
+            # 4. ТАБЛИЦА REPORTS (Исправляем вашу новую ошибку)
+            db.session.execute(text("ALTER TABLE reports ADD COLUMN IF NOT EXISTS post_id INTEGER"))
+            db.session.execute(text("ALTER TABLE reports ADD COLUMN IF NOT EXISTS target_user_id INTEGER"))
+            db.session.execute(text("ALTER TABLE reports ADD COLUMN IF NOT EXISTS reason TEXT"))
+            db.session.execute(text("ALTER TABLE reports ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'open'"))
+            db.session.execute(text("ALTER TABLE reports ADD COLUMN IF NOT EXISTS timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP"))
+
+            # 5. Сообщения
             db.session.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS read_at TIMESTAMP"))
             db.session.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS deleted_for_all BOOLEAN DEFAULT FALSE"))
 
             db.session.commit()
-            print(">>> ПОЛНОЕ ОБНОВЛЕНИЕ БАЗЫ: Все колонки (включая link) добавлены! <<<")
+            print(">>> БАЗА ДАННЫХ ПОЛНОСТЬЮ ОБНОВЛЕНА: Жалобы, уведомления и сессии в порядке! <<<")
     except Exception as e:
         print(f"Schema check failed: {e}")
         db.session.rollback()
