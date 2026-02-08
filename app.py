@@ -13,7 +13,7 @@ from flask import Flask, render_template, redirect, url_for, request, flash, jso
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
-from sqlalchemy import or_, and_, func
+from sqlalchemy import or_, and_, func, text
 import jinja2
 from flask_socketio import SocketIO, emit, join_room, leave_room
 
@@ -301,6 +301,20 @@ class UserSession(db.Model):
     last_seen = db.Column(db.DateTime, default=datetime.utcnow)
     is_active = db.Column(db.Boolean, default=True)
 
+def ensure_user_sessions_schema():
+    try:
+        with app.app_context():
+            db.session.execute(text("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS ip VARCHAR(64)"))
+            db.session.execute(text("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS city VARCHAR(100)"))
+            db.session.execute(text("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS user_agent VARCHAR(300)"))
+            db.session.execute(text("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS created_at TIMESTAMP"))
+            db.session.execute(text("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS last_seen TIMESTAMP"))
+            db.session.execute(text("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE"))
+            db.session.commit()
+    except Exception as e:
+        print(f"Schema check failed: {e}")
+        db.session.rollback()
+
 class GroupRole(db.Model):
     __tablename__ = 'group_roles'
     id = db.Column(db.Integer, primary_key=True)
@@ -315,6 +329,8 @@ class GroupJoinRequest(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     status = db.Column(db.String(30), default='pending')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+ensure_user_sessions_schema()
 
 @login_manager.user_loader
 def load_user(user_id):
