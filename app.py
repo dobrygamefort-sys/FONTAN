@@ -303,9 +303,10 @@ class UserSession(db.Model):
 
 
 def ensure_user_sessions_schema():
+    from sqlalchemy import text
     try:
         with app.app_context():
-            # Исправляем user_sessions (ошибка с IP)
+            # 1. Исправляем user_sessions
             db.session.execute(text("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS ip VARCHAR(64)"))
             db.session.execute(text("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS city VARCHAR(100)"))
             db.session.execute(text("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS user_agent VARCHAR(300)"))
@@ -313,14 +314,21 @@ def ensure_user_sessions_schema():
             db.session.execute(text("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS last_seen TIMESTAMP"))
             db.session.execute(text("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE"))
             
-            # Исправляем notifications (ошибка с ntype)
+            # 2. Исправляем notifications (ВАЖНО: добавляем link и from_user_id)
             db.session.execute(text("ALTER TABLE notifications ADD COLUMN IF NOT EXISTS ntype VARCHAR(50) DEFAULT 'system'"))
+            db.session.execute(text("ALTER TABLE notifications ADD COLUMN IF NOT EXISTS link VARCHAR(500)"))
+            db.session.execute(text("ALTER TABLE notifications ADD COLUMN IF NOT EXISTS from_user_id INTEGER"))
             
-            # Исправляем stories (ошибка с created_at)
+            # 3. Исправляем stories
             db.session.execute(text("ALTER TABLE stories ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"))
+            db.session.execute(text("ALTER TABLE stories ADD COLUMN IF NOT EXISTS media_type VARCHAR(50) DEFAULT 'image'"))
+
+            # 4. Исправляем messages (на всякий случай)
+            db.session.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS read_at TIMESTAMP"))
+            db.session.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS deleted_for_all BOOLEAN DEFAULT FALSE"))
 
             db.session.commit()
-            print(">>> Схема базы данных успешно обновлена! <<<")
+            print(">>> ПОЛНОЕ ОБНОВЛЕНИЕ БАЗЫ: Все колонки (включая link) добавлены! <<<")
     except Exception as e:
         print(f"Schema check failed: {e}")
         db.session.rollback()
