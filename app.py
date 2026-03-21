@@ -530,7 +530,8 @@ def safe_from_json(value):
     try:
         return json.loads(value)
     except (TypeError, ValueError, json.JSONDecodeError):
-        return {}
+        raw = str(value).strip()
+        return [] if raw.startswith('[') else {}
 
 def create_notification(user_id, ntype, message=None, link=None, from_user_id=None):
     try:
@@ -1296,32 +1297,34 @@ function votePoll(pollId, optionIndex) {
 
     'post_card.html': """
 <div class="card p-3">
+    {% set post_author = post.author %}
+    {% set post_co_author = post.co_author %}
     <div class="d-flex justify-content-between align-items-start">
         <div class="d-flex align-items-center">
-            <a href="{{ url_for('profile', username=post.author.username) }}" class="text-decoration-none">
+            <a href="{{ url_for('profile', username=(post_author.username if post_author else current_user.username)) }}" class="text-decoration-none">
                 <div class="avatar me-2">
-                    {% if post.author.avatar %}
-                        <img src="{{ post.author.avatar }}">
+                    {% if post_author and post_author.avatar %}
+                        <img src="{{ post_author.avatar }}">
                     {% else %}
-                        {{ post.author.username[0].upper() }}
+                        {{ post_author.username[0].upper() if post_author else '?' }}
                     {% endif %}
                 </div>
             </a>
             <div>
-                <a href="{{ url_for('profile', username=post.author.username) }}" class="fw-bold text-decoration-none" style="color: var(--text-color);">
-                    {{ post.author.username }}
-                    {% if post.author.is_verified %}<i class="bi bi-patch-check-fill verified-icon"></i>{% endif %}
+                <a href="{{ url_for('profile', username=(post_author.username if post_author else current_user.username)) }}" class="fw-bold text-decoration-none" style="color: var(--text-color);">
+                    {{ post_author.username if post_author else 'Удалённый пользователь' }}
+                    {% if post_author and post_author.is_verified %}<i class="bi bi-patch-check-fill verified-icon"></i>{% endif %}
                 </a>
-                {% if post.co_author_id %}
+                {% if post.co_author_id and post_co_author %}
                     <span class="text-muted small">· cо‑автор</span>
-                    <a href="{{ url_for('profile', username=post.co_author.username) }}" class="text-decoration-none text-muted small">
-                        {{ post.co_author.username }}
+                    <a href="{{ url_for('profile', username=post_co_author.username) }}" class="text-decoration-none text-muted small">
+                        {{ post_co_author.username }}
                     </a>
                 {% endif %}
                 <div class="text-muted small" style="font-size: 0.75rem;">{{ post.timestamp|time_ago }}{% if post.edited_at %} · изменено{% endif %}</div>
             </div>
         </div>
-        {% if post.author.id == current_user.id or current_user.is_admin %}
+        {% if (post_author and post_author.id == current_user.id) or current_user.is_admin %}
         <div class="d-flex gap-2">
             <a class="text-secondary" href="#" onclick="editPost({{ post.id }});return false;"><i class="bi bi-pencil"></i></a>
             <a class="text-danger" href="{{ url_for('delete_post', post_id=post.id) }}"><i class="bi bi-trash"></i></a>
@@ -1420,8 +1423,8 @@ function votePoll(pollId, optionIndex) {
         <div class="mb-2 border-bottom pb-1">
             <div class="d-flex justify-content-between">
                  <small>
-                     <b>{{ comment.author.username }}</b>
-                     {% if comment.author.is_verified %}<i class="bi bi-patch-check-fill verified-icon" style="font-size: 10px;"></i>{% endif %}
+                     <b>{{ comment.author.username if comment.author else 'Удалённый пользователь' }}</b>
+                     {% if comment.author and comment.author.is_verified %}<i class="bi bi-patch-check-fill verified-icon" style="font-size: 10px;"></i>{% endif %}
                      :
                  </small>
                  {% if comment.user_id == current_user.id or post.user_id == current_user.id or current_user.is_admin %}
@@ -1730,7 +1733,10 @@ function votePoll(pollId, optionIndex) {
     let screenStream = null;
     let callTimerInterval = null;
     let callStartedAt = null;
+    let callConnectTimeout = null;
     let isRemoteAudioEnabled = true;
+    const CALL_STORAGE_KEY = `fontan_call_state_${currentUserId}`;
+    const CALL_CONNECT_TIMEOUT_MS = 25000;
 
     try {
         const pendingIncomingCall = JSON.parse(sessionStorage.getItem('pendingIncomingCall') || 'null');
@@ -1740,12 +1746,73 @@ function votePoll(pollId, optionIndex) {
                 chatId: pendingIncomingCall.chat_id,
                 username: pendingIncomingCall.from_username,
                 avatar: pendingIncomingCall.from_avatar,
-                kind: pendingIncomingCall.kind || 'audio'
+                kind: pendingIncomingCall.kind || 'audio',
+                mode: 'incoming'
             };
             sessionStorage.removeItem('pendingIncomingCall');
         }
+        if (!activeCall) {
+            const savedCall = JSON.parse(sessionStorage.getItem(CALL_STORAGE_KEY) || 'null');
+            if (savedCall && Number(savedCall.peerId) === Number(chatId)) {
+                activeCall = {
+                    peerId: savedCall.peerId,
+                    chatId: savedCall.chatId || chatId,
+                    username: savedCall.username,
+                    avatar: savedCall.avatar,
+                    kind: savedCall.kind || 'audio',
+                    mode: savedCall.mode || 'reconnecting',
+                    restored: true
+                };
+                if (savedCall.startedAt) {
+                    callStartedAt = savedCall.startedAt;
+                }
+            }
+        }
     } catch (error) {
         console.error(error);
+    }
+
+    function persistCallState() {
+        if (!activeCall) return;
+        try {
+            sessionStorage.setItem(CALL_STORAGE_KEY, JSON.stringify({
+                peerId: activeCall.peerId,
+                chatId: activeCall.chatId || chatId,
+                username: activeCall.username,
+                avatar: activeCall.avatar,
+                kind: activeCall.kind || 'audio',
+                mode: activeCall.mode || 'incoming',
+                startedAt: callStartedAt,
+                restored: !!activeCall.restored
+            }));
+        } catch (error) {
+            console.error(error);
+        }
+    }
+
+    function clearCallState() {
+        try {
+            sessionStorage.removeItem(CALL_STORAGE_KEY);
+            sessionStorage.removeItem('pendingIncomingCall');
+        } catch (error) {
+            console.error(error);
+        }
+    }
+
+    function clearConnectTimeout() {
+        if (callConnectTimeout) {
+            clearTimeout(callConnectTimeout);
+            callConnectTimeout = null;
+        }
+    }
+
+    function startConnectTimeout() {
+        clearConnectTimeout();
+        callConnectTimeout = setTimeout(() => {
+            if (!activeCall) return;
+            alert('Не удалось подключить звонок. Попробуйте позвонить ещё раз.');
+            finishCall(false);
+        }, CALL_CONNECT_TIMEOUT_MS);
     }
 
     function escapeHtml(value) {
@@ -1896,6 +1963,19 @@ function votePoll(pollId, optionIndex) {
         socket.emit('join_user_room', { user_id: currentUserId });
         loadMessages();
         socket.emit('presence', { online: true });
+        if (chatType === 'private' && activeCall?.restored && activeCall.peerId === peerMeta.id && activeCall.mode !== 'incoming') {
+            showCallOverlay('reconnecting', 'Восстанавливаем звонок...', activeCall);
+            startConnectTimeout();
+            socket.emit('call_invite', {
+                to_user_id: activeCall.peerId,
+                chat_id: chatId,
+                kind: activeCall.kind || 'audio',
+                from_id: currentUserId,
+                from_username: currentUsername,
+                from_avatar: currentUserAvatar,
+                restored: true
+            });
+        }
     });
 
     socket.on('message', (data) => {
@@ -1937,6 +2017,10 @@ function votePoll(pollId, optionIndex) {
 
     function showCallOverlay(mode, statusText, user) {
         if (!callOverlay) return;
+        if (activeCall) {
+            activeCall.mode = mode;
+            persistCallState();
+        }
         setCallIdentity(user || activeCall || peerMeta);
         callOverlay.style.display = 'block';
         callStatus.textContent = statusText || 'Соединение...';
@@ -1960,17 +2044,24 @@ function votePoll(pollId, optionIndex) {
     }
 
     if (activeCall) {
+        if (activeCall.mode !== 'incoming') {
+            showCallOverlay('reconnecting', 'Восстанавливаем звонок...', activeCall);
+            startConnectTimeout();
+        } else {
         showCallOverlay(
             'incoming',
             activeCall.kind === 'video' ? 'Входящий видео звонок' : 'Входящий звонок',
             activeCall
         );
         incomingRingtone?.play().catch(() => {});
+        }
     }
 
     function startCallClock() {
+        clearConnectTimeout();
         clearInterval(callTimerInterval);
         callStartedAt = Date.now();
+        persistCallState();
         callTimerInterval = setInterval(() => {
             const total = Math.floor((Date.now() - callStartedAt) / 1000);
             const mins = String(Math.floor(total / 60)).padStart(2, '0');
@@ -2022,6 +2113,10 @@ function votePoll(pollId, optionIndex) {
         };
         peerConnection.onconnectionstatechange = () => {
             if (peerConnection.connectionState === 'connected') {
+                if (activeCall) {
+                    activeCall.mode = 'active';
+                    persistCallState();
+                }
                 callStatus.textContent = 'В эфире';
                 startCallClock();
             }
@@ -2043,6 +2138,7 @@ function votePoll(pollId, optionIndex) {
     }
 
     async function finishCall(notifyPeer = true) {
+        clearConnectTimeout();
         stopCallClock();
         stopRingtones();
         if (notifyPeer && activeCall?.peerId) {
@@ -2061,15 +2157,17 @@ function votePoll(pollId, optionIndex) {
             localStream = null;
         }
         activeCall = null;
+        clearCallState();
         hideCallOverlay();
     }
 
     async function startOutgoingCall(kind = 'audio') {
         if (chatType !== 'private' || activeCall) return;
-        activeCall = { peerId: peerMeta.id, username: peerMeta.username, avatar: peerMeta.avatar, kind };
+        activeCall = { peerId: peerMeta.id, username: peerMeta.username, avatar: peerMeta.avatar, kind, mode: 'outgoing' };
         showCallOverlay('outgoing', kind === 'video' ? 'Видео звонок...' : 'Звоним...', activeCall);
         stopRingtones();
         outgoingRingtone?.play().catch(() => {});
+        startConnectTimeout();
         await ensureLocalStream({ audio: true, video: kind === 'video' });
         socket.emit('call_invite', {
             to_user_id: peerMeta.id,
@@ -2089,9 +2187,13 @@ function votePoll(pollId, optionIndex) {
             const answer = await peerConnection.createAnswer();
             await peerConnection.setLocalDescription(answer);
             socket.emit('call_signal', { to_user_id: fromUserId, signal: { type: 'answer', sdp: peerConnection.localDescription } });
+            activeCall.mode = 'connecting';
+            startConnectTimeout();
             showCallOverlay('active', 'Соединяем...', activeCall);
         } else if (signal.type === 'answer' && peerConnection) {
             await peerConnection.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+            activeCall.mode = 'connecting';
+            startConnectTimeout();
             showCallOverlay('active', 'Соединяем...', activeCall);
         } else if (signal.type === 'ice' && peerConnection && signal.candidate) {
             try { await peerConnection.addIceCandidate(new RTCIceCandidate(signal.candidate)); } catch (error) { console.error(error); }
@@ -2103,6 +2205,8 @@ function votePoll(pollId, optionIndex) {
     callAcceptBtn?.addEventListener('click', async () => {
         if (!activeCall) return;
         stopRingtones();
+        activeCall.mode = 'connecting';
+        startConnectTimeout();
         showCallOverlay('active', 'Подключаемся...', activeCall);
         await ensureLocalStream({ audio: true, video: activeCall.kind === 'video' });
         socket.emit('call_accept', { to_user_id: activeCall.peerId, chat_id: activeCall.chatId, kind: activeCall.kind });
@@ -2179,13 +2283,15 @@ function votePoll(pollId, optionIndex) {
 
     socket.on('call_invite', (data) => {
         if (data.from_id === currentUserId || activeCall) return;
-        activeCall = { peerId: data.from_id, chatId: data.chat_id, username: data.from_username, avatar: data.from_avatar, kind: data.kind || 'audio' };
+        activeCall = { peerId: data.from_id, chatId: data.chat_id, username: data.from_username, avatar: data.from_avatar, kind: data.kind || 'audio', mode: 'incoming' };
         showCallOverlay('incoming', data.kind === 'video' ? 'Входящий видео звонок' : 'Входящий звонок', activeCall);
         stopRingtones();
         incomingRingtone?.play().catch(() => {});
     });
     socket.on('call_accepted', async (data) => {
         if (!activeCall || data.from_id !== activeCall.peerId) return;
+        activeCall.mode = 'connecting';
+        startConnectTimeout();
         stopRingtones();
         showCallOverlay('active', 'Соединяем...', activeCall);
         await ensurePeerConnection();
@@ -3275,7 +3381,7 @@ def create_post():
 @login_required
 def delete_post(post_id):
     post = db.session.get(Post, post_id)
-    if post and (post.author.id == current_user.id or current_user.is_admin):
+    if post and (post.user_id == current_user.id or current_user.is_admin):
         db.session.delete(post)
         db.session.commit()
     return redirect(url_for('index'))
