@@ -1734,6 +1734,7 @@ function votePoll(pollId, optionIndex) {
     let callTimerInterval = null;
     let callStartedAt = null;
     let callConnectTimeout = null;
+    let callDisconnectTimeout = null;
     let isRemoteAudioEnabled = true;
     const CALL_STORAGE_KEY = `fontan_call_state_${currentUserId}`;
     const CALL_CONNECT_TIMEOUT_MS = 25000;
@@ -1806,6 +1807,13 @@ function votePoll(pollId, optionIndex) {
         }
     }
 
+    function clearDisconnectTimeout() {
+        if (callDisconnectTimeout) {
+            clearTimeout(callDisconnectTimeout);
+            callDisconnectTimeout = null;
+        }
+    }
+
     function startConnectTimeout() {
         clearConnectTimeout();
         callConnectTimeout = setTimeout(() => {
@@ -1813,6 +1821,16 @@ function votePoll(pollId, optionIndex) {
             alert('Не удалось подключить звонок. Попробуйте позвонить ещё раз.');
             finishCall(false);
         }, CALL_CONNECT_TIMEOUT_MS);
+    }
+
+    function scheduleDisconnectRecovery() {
+        clearDisconnectTimeout();
+        callDisconnectTimeout = setTimeout(() => {
+            if (!peerConnection) return;
+            if (['disconnected', 'failed', 'closed'].includes(peerConnection.connectionState)) {
+                finishCall(false);
+            }
+        }, 8000);
     }
 
     function escapeHtml(value) {
@@ -1955,7 +1973,8 @@ function votePoll(pollId, optionIndex) {
         loadMessages();
     }
     
-    const socket = io();
+    const socket = window.fontanBaseSocket || io();
+    window.fontanBaseSocket = socket;
     let typingTimeout = null;
 
     socket.on('connect', () => {
@@ -2113,6 +2132,7 @@ function votePoll(pollId, optionIndex) {
         };
         peerConnection.onconnectionstatechange = () => {
             if (peerConnection.connectionState === 'connected') {
+                clearDisconnectTimeout();
                 if (activeCall) {
                     activeCall.mode = 'active';
                     persistCallState();
@@ -2120,7 +2140,11 @@ function votePoll(pollId, optionIndex) {
                 callStatus.textContent = 'В эфире';
                 startCallClock();
             }
-            if (['failed', 'closed', 'disconnected'].includes(peerConnection.connectionState)) {
+            if (peerConnection.connectionState === 'disconnected') {
+                callStatus.textContent = 'Связь пропала, пытаемся восстановить...';
+                scheduleDisconnectRecovery();
+            }
+            if (['failed', 'closed'].includes(peerConnection.connectionState)) {
                 finishCall(false);
             }
         };
@@ -2137,8 +2161,20 @@ function votePoll(pollId, optionIndex) {
         socket.emit('call_signal', { to_user_id: activeCall.peerId, signal: { type: 'offer', sdp: peerConnection.localDescription } });
     }
 
+    async function syncVideoSender(track, streamForTrack = null) {
+        if (!peerConnection || !track) return;
+        const sender = peerConnection.getSenders().find(item => item.track && item.track.kind === 'video');
+        if (sender) {
+            await sender.replaceTrack(track);
+            return;
+        }
+        peerConnection.addTrack(track, streamForTrack || localStream);
+        await sendOffer();
+    }
+
     async function finishCall(notifyPeer = true) {
         clearConnectTimeout();
+        clearDisconnectTimeout();
         stopCallClock();
         stopRingtones();
         if (notifyPeer && activeCall?.peerId) {
@@ -2233,13 +2269,7 @@ function votePoll(pollId, optionIndex) {
         const track = localStream.getVideoTracks()[0];
         if (track) track.enabled = !track.enabled;
         if (peerConnection && track) {
-            const sender = peerConnection.getSenders().find(item => item.track && item.track.kind === 'video');
-            if (sender) {
-                await sender.replaceTrack(track);
-            } else {
-                peerConnection.addTrack(track, localStream);
-                await sendOffer();
-            }
+            await syncVideoSender(track, localStream);
         }
         callCameraBtn.classList.toggle('btn-danger', track && !track.enabled);
     });
@@ -2254,14 +2284,8 @@ function votePoll(pollId, optionIndex) {
         try {
             screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
             const screenTrack = screenStream.getVideoTracks()[0];
-            if (peerConnection) {
-                const sender = peerConnection.getSenders().find(item => item.track && item.track.kind === 'video');
-                if (sender) {
-                    await sender.replaceTrack(screenTrack);
-                } else {
-                    peerConnection.addTrack(screenTrack, screenStream);
-                    await sendOffer();
-                }
+            if (peerConnection && screenTrack) {
+                await syncVideoSender(screenTrack, screenStream);
             }
             localPreview.srcObject = screenStream;
             localPreview.style.display = 'block';
@@ -2271,8 +2295,7 @@ function votePoll(pollId, optionIndex) {
                 localPreview.srcObject = localStream;
                 if (peerConnection && localStream?.getVideoTracks()[0]) {
                     const cameraTrack = localStream.getVideoTracks()[0];
-                    const sender = peerConnection.getSenders().find(item => item.track && item.track.kind === 'video');
-                    if (sender) await sender.replaceTrack(cameraTrack);
+                    await syncVideoSender(cameraTrack, localStream);
                 }
                 callScreenBtn.classList.remove('btn-danger');
             };
@@ -2614,7 +2637,7 @@ new Chart(document.getElementById('postsChart'), {
   </div>
   <div class="col-md-8">
     <h5>Посты и хэштеги</h5>
-    {% for p in posts %}
+    {% for post in posts %}
       {% include 'post_card.html' %}
     {% endfor %}
   </div>
