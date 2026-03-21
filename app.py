@@ -3,13 +3,15 @@ import uuid
 import json
 import re
 import random
+from pathlib import Path
+from urllib.parse import quote_plus
 from datetime import datetime, timedelta
 # Подключаем Cloudinary
 import cloudinary
 import cloudinary.uploader
 import cloudinary.api
 
-from flask import Flask, render_template, redirect, url_for, request, flash, jsonify, abort, session
+from flask import Flask, render_template, redirect, url_for, request, flash, jsonify, abort, session, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -46,6 +48,8 @@ db = SQLAlchemy(app)
 login_manager = LoginManager(app)
 login_manager.login_view = 'login'
 socketio = SocketIO(app, cors_allowed_origins="*")
+MEDIA_EXTENSIONS = ('.mp3', '.wav', '.ogg', '.webm', '.m4a')
+WEBRTC_ICE_SERVERS = [{"urls": ["stun:stun.l.google.com:19302"]}]
 
 # --- ФУНКЦИЯ ЗАГРУЗКИ В ОБЛАКО ---
 def upload_to_cloud(file_obj, resource_type="auto"):
@@ -65,6 +69,69 @@ def upload_to_cloud(file_obj, resource_type="auto"):
 def allowed_file(filename):
     ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'mp4', 'webm', 'mp3', 'wav', 'ogg'}
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def normalize_text(value):
+    return re.sub(r'\s+', ' ', (value or '').strip())
+
+def consume_idempotency_token(scope, token, ttl_seconds=1800):
+    token = (token or '').strip()
+    if not token:
+        return True
+
+    now_ts = int(datetime.utcnow().timestamp())
+    idempotency = session.get('_idempotency', {})
+    scope_items = [
+        item for item in idempotency.get(scope, [])
+        if now_ts - int(item.get('ts', 0)) < ttl_seconds
+    ]
+    if any(item.get('token') == token for item in scope_items):
+        return False
+
+    scope_items.append({'token': token, 'ts': now_ts})
+    idempotency[scope] = scope_items[-30:]
+    session['_idempotency'] = idempotency
+    session.modified = True
+    return True
+
+def recent_duplicate_signature(scope, signature, ttl_seconds=12):
+    signature = (signature or '').strip()
+    if not signature:
+        return False
+
+    now_ts = int(datetime.utcnow().timestamp())
+    recent = session.get('_recent_signatures', {})
+    scope_items = [
+        item for item in recent.get(scope, [])
+        if now_ts - int(item.get('ts', 0)) < ttl_seconds
+    ]
+    if any(item.get('sig') == signature for item in scope_items):
+        recent[scope] = scope_items
+        session['_recent_signatures'] = recent
+        session.modified = True
+        return True
+
+    scope_items.append({'sig': signature, 'ts': now_ts})
+    recent[scope] = scope_items[-20:]
+    session['_recent_signatures'] = recent
+    session.modified = True
+    return False
+
+def find_media_asset(asset_name):
+    candidates = [asset_name]
+    if not Path(asset_name).suffix:
+        candidates.extend([f'{asset_name}{ext}' for ext in MEDIA_EXTENSIONS])
+
+    search_roots = [
+        Path(app.root_path),
+        Path(app.root_path) / 'static',
+        Path(app.root_path) / 'static' / 'audio',
+    ]
+    for candidate in candidates:
+        for root in search_roots:
+            file_path = root / candidate
+            if file_path.exists() and file_path.is_file():
+                return file_path
+    return None
 
 # --- AI МОДЕРАЦИЯ КОНТЕНТА ---
 def moderate_content(text):
@@ -182,6 +249,7 @@ class Message(db.Model):
     read_at = db.Column(db.DateTime, nullable=True)
     deleted_for_all = db.Column(db.Boolean, default=False)
     deleted_for = db.Column(db.Text, default='[]')  # JSON list of user ids
+    client_token = db.Column(db.String(80), nullable=True)
     sender = db.relationship('User', foreign_keys=[sender_id])
 
 class Like(db.Model):
@@ -204,6 +272,7 @@ class Comment(db.Model):
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     post_id = db.Column(db.Integer, db.ForeignKey('posts.id'), nullable=False)
+    client_token = db.Column(db.String(80), nullable=True)
     author = db.relationship('User', backref='comments')
 
 class Poll(db.Model):
@@ -236,6 +305,7 @@ class Post(db.Model):
     is_moderated = db.Column(db.Boolean, default=True)
     moderation_reason = db.Column(db.String(200), nullable=True)
     comments_enabled = db.Column(db.Boolean, default=True)
+    client_token = db.Column(db.String(80), nullable=True)
     
     comments_rel = db.relationship('Comment', backref='post', cascade="all, delete-orphan", lazy=True)
     likes_rel = db.relationship('Like', backref='post', cascade="all, delete-orphan", lazy=True)
@@ -333,6 +403,9 @@ def ensure_user_sessions_schema():
             # 5. Сообщения
             db.session.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS read_at TIMESTAMP"))
             db.session.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS deleted_for_all BOOLEAN DEFAULT FALSE"))
+            db.session.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS client_token VARCHAR(80)"))
+            db.session.execute(text("ALTER TABLE comments ADD COLUMN IF NOT EXISTS client_token VARCHAR(80)"))
+            db.session.execute(text("ALTER TABLE posts ADD COLUMN IF NOT EXISTS client_token VARCHAR(80)"))
 
             db.session.commit()
             print(">>> БАЗА ДАННЫХ ПОЛНОСТЬЮ ОБНОВЛЕНА: Жалобы, уведомления и сессии в порядке! <<<")
@@ -380,12 +453,22 @@ def check_ban():
 @app.before_request
 def update_last_seen():
     if current_user.is_authenticated:
-        current_user.last_seen = datetime.utcnow()
+        now = datetime.utcnow()
+        last_sync = session.get('last_seen_sync')
+        if last_sync:
+            try:
+                if now - datetime.fromisoformat(last_sync) < timedelta(seconds=30):
+                    return None
+            except ValueError:
+                pass
+
+        current_user.last_seen = now
         token = session.get('session_token')
         if token:
             sess = UserSession.query.filter_by(session_token=token, user_id=current_user.id, is_active=True).first()
             if sess:
-                sess.last_seen = datetime.utcnow()
+                sess.last_seen = now
+        session['last_seen_sync'] = now.isoformat()
         db.session.commit()
 
 # --- ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ ВРЕМЕНИ ---
@@ -435,7 +518,7 @@ def linkify_text(text):
         return f'<a href="/profile/{uname}" class="text-primary">@{uname}</a>'
     def repl_tag(match):
         tag = match.group(1)
-        return f'<a href="/search?q=%23{tag}" class="text-success">#{tag}</a>'
+        return f'<a href="/search?q={quote_plus(f"#{tag}")}" class="text-success fw-semibold">#{tag}</a>'
     text = re.sub(r'@([A-Za-z0-9_\\.]+)', repl_mention, text)
     text = re.sub(r'#([A-Za-z0-9_\\.]+)', repl_tag, text)
     return text
@@ -468,6 +551,17 @@ def get_room(chat_type, chat_id, user_id):
         a, b = sorted([int(user_id), int(chat_id)])
         return f"private_{a}_{b}"
     return f"group_{chat_id}"
+
+@app.route('/media_asset/<asset_name>')
+def media_asset(asset_name):
+    if asset_name not in {'rigton', 'rigton2'}:
+        abort(404)
+
+    file_path = find_media_asset(asset_name)
+    if not file_path:
+        abort(404)
+
+    return send_from_directory(str(file_path.parent), file_path.name, conditional=True)
 
 # --- ШАБЛОНЫ ---
 templates = {
@@ -835,10 +929,47 @@ templates = {
             }
         }
         
+        function generateActionToken() {
+            if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+                return window.crypto.randomUUID();
+            }
+            return `tok_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+        }
+
+        function initIdempotentForms(root = document) {
+            root.querySelectorAll('form.js-idempotent-form').forEach(form => {
+                if (form.dataset.idempotentBound === '1') return;
+                form.dataset.idempotentBound = '1';
+                form.addEventListener('submit', () => {
+                    let tokenInput = form.querySelector('input[name=\"client_token\"]');
+                    if (!tokenInput) {
+                        tokenInput = document.createElement('input');
+                        tokenInput.type = 'hidden';
+                        tokenInput.name = 'client_token';
+                        form.appendChild(tokenInput);
+                    }
+                    if (!tokenInput.value) {
+                        tokenInput.value = generateActionToken();
+                    }
+                    form.querySelectorAll('button[type=\"submit\"], input[type=\"submit\"]').forEach(btn => {
+                        btn.disabled = true;
+                        if (btn.tagName === 'BUTTON') {
+                            btn.dataset.originalHtml = btn.dataset.originalHtml || btn.innerHTML;
+                            btn.innerHTML = '<span class=\"spinner-border spinner-border-sm me-1\"></span>Отправка';
+                        } else {
+                            btn.dataset.originalValue = btn.dataset.originalValue || btn.value;
+                            btn.value = 'Отправка...';
+                        }
+                    });
+                });
+            });
+        }
+        
         // Инициализация иконки при загрузке
         document.addEventListener('DOMContentLoaded', function() {
             const theme = document.documentElement.getAttribute('data-theme');
             updateThemeIcon(theme);
+            initIdempotentForms(document);
         });
 
         function openLightbox(url, type) {
@@ -959,7 +1090,8 @@ templates = {
         </div>
 
         <div class="card p-3">
-            <form method="POST" action="{{ url_for('create_post') }}" enctype="multipart/form-data" id="create-post-form">
+            <form method="POST" action="{{ url_for('create_post') }}" enctype="multipart/form-data" id="create-post-form" class="js-idempotent-form">
+                <input type="hidden" name="client_token">
                 <textarea name="content" class="form-control border-0 bg-light rounded-3 p-3" placeholder="Что нового?" rows="3"></textarea>
                 
                 <div id="poll-section" style="display: none;" class="mt-3 p-3 bg-light rounded-3">
@@ -1065,6 +1197,9 @@ function loadMorePosts() {
                     div.innerHTML = postHtml;
                     container.appendChild(div.firstElementChild);
                 });
+                if (window.initIdempotentForms) {
+                    window.initIdempotentForms(container);
+                }
                 isLoading = false;
             } else {
                 hasMore = false;
@@ -1269,7 +1404,8 @@ function votePoll(pollId, optionIndex) {
         {% endfor %}
         {% if post.comments_enabled %}
         <div class="mt-2">
-              <form action="{{ url_for('add_comment', post_id=post.id) }}" method="POST" class="d-flex gap-1 align-items-center">
+              <form action="{{ url_for('add_comment', post_id=post.id) }}" method="POST" class="d-flex gap-1 align-items-center js-idempotent-form">
+                <input type="hidden" name="client_token">
                 <input type="text" name="text" class="form-control form-control-sm rounded-pill" placeholder="Комментарий...">
                 <button type="button" class="btn btn-sm btn-danger btn-record-comment rounded-circle" data-post-id="{{ post.id }}"><i class="bi bi-mic-fill"></i></button>
                 <button type="submit" class="btn btn-sm btn-primary rounded-circle"><i class="bi bi-send-fill"></i></button>
@@ -1309,6 +1445,12 @@ function votePoll(pollId, optionIndex) {
                             {% if follower.is_verified %}<i class="bi bi-patch-check-fill verified-icon"></i>{% endif %}
                         </h5>
                         <small class="text-muted">{{ follower.bio }}</small>
+                    </div>
+                    <div class="d-flex gap-2">
+                        {% if chat_type == 'private' %}
+                        <button id="btn-start-call" class="btn btn-outline-success rounded-circle" title="Позвонить"><i class="bi bi-telephone-fill"></i></button>
+                        <button id="btn-start-video" class="btn btn-outline-primary rounded-circle" title="Видео"><i class="bi bi-camera-video-fill"></i></button>
+                        {% endif %}
                     </div>
                 </div>
                 <div>
@@ -1402,8 +1544,17 @@ function votePoll(pollId, optionIndex) {
 
         <div class="col-md-8 h-100 d-flex flex-column position-relative" style="background-color: var(--card-bg);">
             {% if active_chat %}
-                <div class="p-3 border-bottom d-flex align-items-center justify-content-between shadow-sm" style="z-index: 10;">
-                    <div class="d-flex align-items-center">
+                <div class="p-3 border-bottom d-flex align-items-center justify-content-between shadow-sm" style="z-index: 10; backdrop-filter: blur(14px); background: linear-gradient(180deg, rgba(79,70,229,0.06), transparent), var(--card-bg);">
+                    <div class="d-flex align-items-center gap-3">
+                        {% if chat_type == 'private' %}
+                        <div class="avatar" style="width:46px; height:46px;">
+                            {% if active_chat.avatar %}
+                                <img src="{{ active_chat.avatar }}">
+                            {% else %}
+                                {{ active_chat.username[0].upper() }}
+                            {% endif %}
+                        </div>
+                        {% endif %}
                         <div class="fw-bold fs-5">
                             {% if chat_type == 'private' %}
                                 {{ active_chat.username }}
@@ -1419,12 +1570,41 @@ function votePoll(pollId, optionIndex) {
                     <div class="d-flex gap-2 align-items-center">
                         <input type="hidden" id="chat_type" value="{{ chat_type }}">
                         <input type="hidden" id="chat_id" value="{{ active_chat.id }}">
+                        {% if chat_type == 'private' %}
+                        <button id="btn-start-call" class="btn btn-outline-success rounded-circle" title="Позвонить"><i class="bi bi-telephone-fill"></i></button>
+                        <button id="btn-start-video" class="btn btn-outline-primary rounded-circle" title="Видео"><i class="bi bi-camera-video-fill"></i></button>
+                        {% endif %}
                         <button id="emoji-btn" class="btn btn-outline-secondary rounded-circle">😊</button>
                         <input type="text" id="msg-input" class="form-control rounded-pill border-0 shadow-sm" placeholder="Написать..." autocomplete="off">
                         <button id="btn-record-msg" class="btn btn-danger rounded-circle shadow-sm"><i class="bi bi-mic-fill"></i></button>
                         <button id="btn-send-msg" class="btn btn-primary rounded-circle shadow-sm"><i class="bi bi-send-fill"></i></button>
                     </div>
                 </div>
+                <div id="call-overlay" style="display:none; position:absolute; inset:16px; z-index:30; border-radius:26px; background:rgba(9,15,30,.74); backdrop-filter:blur(18px);">
+                    <div style="height:100%; display:flex; align-items:center; justify-content:center; padding:24px;">
+                        <div style="width:min(440px,100%); text-align:center; color:#fff; padding:28px; border-radius:28px; background:linear-gradient(135deg, rgba(79,70,229,.96), rgba(17,24,39,.96)); box-shadow:0 30px 80px rgba(15,23,42,.45);">
+                            <video id="remote-media" autoplay playsinline style="display:none; width:min(100%,420px); max-height:280px; object-fit:cover; border-radius:22px; margin:0 auto 16px; background:#050816;"></video>
+                            <div id="call-avatar-wrap" style="width:120px; height:120px; margin:0 auto 18px; border-radius:50%; padding:6px; background:linear-gradient(135deg, rgba(255,255,255,.95), rgba(125,211,252,.45)); animation:pulse 1.8s infinite;">
+                                <div id="call-avatar" style="width:100%; height:100%; border-radius:50%; overflow:hidden; display:flex; align-items:center; justify-content:center; font-size:2rem; font-weight:700; background:rgba(255,255,255,.16);"></div>
+                            </div>
+                            <div id="call-username" class="fs-4 fw-bold">Call</div>
+                            <div id="call-status" style="opacity:.88; min-height:24px;">Готовимся к звонку...</div>
+                            <div id="call-timer" style="font-size:1.5rem; font-weight:700; letter-spacing:.08em; margin:8px 0 18px;">00:00</div>
+                            <div class="d-flex justify-content-center gap-2 flex-wrap">
+                                <button class="btn btn-light rounded-circle" id="call-mic-btn" title="Микрофон"><i class="bi bi-mic-fill"></i></button>
+                                <button class="btn btn-light rounded-circle" id="call-speaker-btn" title="Звук"><i class="bi bi-volume-up-fill"></i></button>
+                                <button class="btn btn-light rounded-circle" id="call-camera-btn" title="Вебка"><i class="bi bi-camera-video-fill"></i></button>
+                                <button class="btn btn-light rounded-circle" id="call-screen-btn" title="Экран"><i class="bi bi-display-fill"></i></button>
+                                <button class="btn btn-success rounded-circle" id="call-accept-btn" title="Ответить" style="display:none;"><i class="bi bi-telephone-inbound-fill"></i></button>
+                                <button class="btn btn-danger rounded-circle" id="call-decline-btn" title="Отклонить" style="display:none;"><i class="bi bi-telephone-x-fill"></i></button>
+                                <button class="btn btn-danger rounded-circle" id="call-end-btn" title="Завершить"><i class="bi bi-telephone-x-fill"></i></button>
+                            </div>
+                        </div>
+                        <video id="local-preview" autoplay muted playsinline style="display:none; position:absolute; right:18px; bottom:18px; width:148px; height:112px; object-fit:cover; border-radius:18px; border:2px solid rgba(255,255,255,.2); background:#050816;"></video>
+                    </div>
+                </div>
+                <audio id="ringtone-outgoing" preload="auto" loop src="{{ url_for('media_asset', asset_name='rigton') }}"></audio>
+                <audio id="ringtone-incoming" preload="auto" loop src="{{ url_for('media_asset', asset_name='rigton2') }}"></audio>
             {% else %}
                 <div class="d-flex align-items-center justify-content-center h-100 text-muted">
                     <h4>Выберите чат</h4>
@@ -1485,23 +1665,95 @@ function votePoll(pollId, optionIndex) {
     const sendBtn = document.getElementById('btn-send-msg');
     const recordBtn = document.getElementById('btn-record-msg');
     const emojiBtn = document.getElementById('emoji-btn');
+    const currentUserId = {{ current_user.id }};
+    const currentUsername = {{ current_user.username|tojson }};
+    const currentUserAvatar = {{ current_user.avatar|default('', true)|tojson }};
+    const peerMeta = {
+        id: {{ active_chat.id|tojson }},
+        username: {% if chat_type == 'private' %}{{ active_chat.username|tojson }}{% else %}{{ active_chat.name|tojson }}{% endif %},
+        avatar: {% if chat_type == 'private' %}{{ active_chat.avatar|default('', true)|tojson }}{% else %}''{% endif %}
+    };
+    const callOverlay = document.getElementById('call-overlay');
+    const callStatus = document.getElementById('call-status');
+    const callTimer = document.getElementById('call-timer');
+    const callUsername = document.getElementById('call-username');
+    const callAvatar = document.getElementById('call-avatar');
+    const callAcceptBtn = document.getElementById('call-accept-btn');
+    const callDeclineBtn = document.getElementById('call-decline-btn');
+    const callMicBtn = document.getElementById('call-mic-btn');
+    const callSpeakerBtn = document.getElementById('call-speaker-btn');
+    const callCameraBtn = document.getElementById('call-camera-btn');
+    const callScreenBtn = document.getElementById('call-screen-btn');
+    const callEndBtn = document.getElementById('call-end-btn');
+    const localPreview = document.getElementById('local-preview');
+    const remoteMedia = document.getElementById('remote-media');
+    const outgoingRingtone = document.getElementById('ringtone-outgoing');
+    const incomingRingtone = document.getElementById('ringtone-incoming');
+    const startCallBtn = Array.from(document.querySelectorAll('#btn-start-call')).pop() || null;
+    const startVideoBtn = Array.from(document.querySelectorAll('#btn-start-video')).pop() || null;
+    const rtcConfig = { iceServers: {{ webrtc_ice_servers|tojson }} };
+    let isSendingMessage = false;
+    let lastRenderedSignature = '';
+    let activeCall = null;
+    let peerConnection = null;
+    let localStream = null;
+    let remoteStream = null;
+    let screenStream = null;
+    let callTimerInterval = null;
+    let callStartedAt = null;
+    let isRemoteAudioEnabled = true;
+
+    function escapeHtml(value) {
+        return (value || '').replace(/[&<>\"']/g, char => ({
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#39;'
+        }[char]));
+    }
+
+    function generateToken() {
+        return window.generateActionToken ? window.generateActionToken() : `msg_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    }
 
     const roomId = chatType === 'private' ? `private_${Math.min({{ current_user.id }}, chatId)}_${Math.max({{ current_user.id }}, chatId)}` : `group_${chatId}`;
 
     async function sendMessage(text, voiceBlob = null) {
+        const trimmedText = (text || '').trim();
+        if ((!trimmedText && !voiceBlob) || isSendingMessage) return;
         const formData = new FormData();
         formData.append('type', chatType);
         formData.append('target_id', chatId);
-        if (text) formData.append('body', text);
+        formData.append('client_token', generateToken());
+        if (trimmedText) formData.append('body', trimmedText);
         if (voiceBlob) formData.append('voice', voiceBlob, 'voice.webm');
 
-        await fetch(`/api/send_message`, { method: 'POST', body: formData });
-        msgInput.value = '';
-        loadMessages();
+        try {
+            isSendingMessage = true;
+            sendBtn.disabled = true;
+            const response = await fetch(`/api/send_message`, { method: 'POST', body: formData });
+            const data = await response.json();
+            if (!response.ok) {
+                alert(data.error || 'Не удалось отправить сообщение');
+                return;
+            }
+            msgInput.value = '';
+            loadMessages();
+        } finally {
+            isSendingMessage = false;
+            sendBtn.disabled = false;
+        }
     }
 
     sendBtn.addEventListener('click', () => {
         if (msgInput.value) sendMessage(msgInput.value);
+    });
+    msgInput.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' && !event.shiftKey) {
+            event.preventDefault();
+            sendMessage(msgInput.value);
+        }
     });
 
     emojiBtn.addEventListener('click', () => {
@@ -1542,8 +1794,10 @@ function votePoll(pollId, optionIndex) {
         try {
             const response = await fetch(`/api/messages?type=${chatType}&id=${chatId}`);
             const messages = await response.json();
+            const signature = JSON.stringify(messages.map(msg => [msg.id, msg.body, msg.edited_at, msg.read_at, msg.deleted_for_all]));
             
-            if (chatBox.childElementCount !== messages.length) {
+            if (lastRenderedSignature !== signature) {
+                lastRenderedSignature = signature;
                 chatBox.innerHTML = ''; 
                 messages.forEach(msg => {
                     const isMe = msg.sender_id == {{ current_user.id }};
@@ -1594,6 +1848,7 @@ function votePoll(pollId, optionIndex) {
 
     socket.on('connect', () => {
         socket.emit('join', { room: roomId });
+        socket.emit('join_user_room', { user_id: currentUserId });
         loadMessages();
         socket.emit('presence', { online: true });
     });
@@ -1605,7 +1860,7 @@ function votePoll(pollId, optionIndex) {
     });
 
     socket.on('typing', (data) => {
-        if (data.room_id === roomId && data.user_id !== {{ current_user.id }}) {
+        if (data.room_id === roomId && data.user_id !== currentUserId) {
             const t = document.getElementById('typing-indicator');
             if (t) { t.style.display = 'block'; }
             clearTimeout(typingTimeout);
@@ -1614,7 +1869,291 @@ function votePoll(pollId, optionIndex) {
     });
 
     document.getElementById('msg-input')?.addEventListener('input', () => {
-        socket.emit('typing', { room_id: roomId, user_id: {{ current_user.id }} });
+        socket.emit('typing', { room_id: roomId, user_id: currentUserId });
+    });
+
+    function stopRingtones() {
+        [incomingRingtone, outgoingRingtone].forEach(audio => {
+            if (!audio) return;
+            audio.pause();
+            audio.currentTime = 0;
+        });
+    }
+
+    function setCallIdentity(user) {
+        if (!callUsername || !callAvatar) return;
+        callUsername.textContent = user?.username || 'Звонок';
+        if (user?.avatar) {
+            callAvatar.innerHTML = `<img src="${user.avatar}" style="width:100%; height:100%; object-fit:cover;">`;
+        } else {
+            callAvatar.textContent = (user?.username || '?').charAt(0).toUpperCase();
+        }
+    }
+
+    function showCallOverlay(mode, statusText, user) {
+        if (!callOverlay) return;
+        setCallIdentity(user || activeCall || peerMeta);
+        callOverlay.style.display = 'block';
+        callStatus.textContent = statusText || 'Соединение...';
+        callAcceptBtn.style.display = mode === 'incoming' ? 'inline-flex' : 'none';
+        callDeclineBtn.style.display = mode === 'incoming' ? 'inline-flex' : 'none';
+        callEndBtn.style.display = mode === 'incoming' ? 'none' : 'inline-flex';
+    }
+
+    function hideCallOverlay() {
+        if (!callOverlay) return;
+        callOverlay.style.display = 'none';
+        callAcceptBtn.style.display = 'none';
+        callDeclineBtn.style.display = 'none';
+        callEndBtn.style.display = 'inline-flex';
+        callTimer.textContent = '00:00';
+        callStatus.textContent = 'Готовимся к звонку...';
+        remoteMedia.style.display = 'none';
+        remoteMedia.srcObject = null;
+        localPreview.style.display = 'none';
+        localPreview.srcObject = null;
+    }
+
+    function startCallClock() {
+        clearInterval(callTimerInterval);
+        callStartedAt = Date.now();
+        callTimerInterval = setInterval(() => {
+            const total = Math.floor((Date.now() - callStartedAt) / 1000);
+            const mins = String(Math.floor(total / 60)).padStart(2, '0');
+            const secs = String(total % 60).padStart(2, '0');
+            callTimer.textContent = `${mins}:${secs}`;
+        }, 1000);
+    }
+
+    function stopCallClock() {
+        clearInterval(callTimerInterval);
+        callTimerInterval = null;
+        callStartedAt = null;
+    }
+
+    async function ensureLocalStream(options = { audio: true, video: false }) {
+        const needAudio = options.audio && !(localStream && localStream.getAudioTracks().length);
+        const needVideo = options.video && !(localStream && localStream.getVideoTracks().length);
+        if (!localStream) localStream = new MediaStream();
+        if (needAudio || needVideo) {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: needAudio, video: needVideo });
+            stream.getTracks().forEach(track => localStream.addTrack(track));
+        }
+        if (localStream.getTracks().length) {
+            localPreview.srcObject = localStream;
+            localPreview.style.display = 'block';
+        }
+        return localStream;
+    }
+
+    async function ensurePeerConnection() {
+        if (peerConnection) return peerConnection;
+        peerConnection = new RTCPeerConnection(rtcConfig);
+        remoteStream = new MediaStream();
+        remoteMedia.srcObject = remoteStream;
+
+        peerConnection.onicecandidate = (event) => {
+            if (event.candidate && activeCall?.peerId) {
+                socket.emit('call_signal', { to_user_id: activeCall.peerId, signal: { type: 'ice', candidate: event.candidate } });
+            }
+        };
+        peerConnection.ontrack = (event) => {
+            event.streams[0].getTracks().forEach(track => {
+                if (!remoteStream.getTracks().some(existing => existing.id === track.id)) {
+                    remoteStream.addTrack(track);
+                }
+            });
+            remoteMedia.style.display = 'block';
+            remoteMedia.play().catch(() => {});
+        };
+        peerConnection.onconnectionstatechange = () => {
+            if (peerConnection.connectionState === 'connected') {
+                callStatus.textContent = 'В эфире';
+                startCallClock();
+            }
+            if (['failed', 'closed', 'disconnected'].includes(peerConnection.connectionState)) {
+                finishCall(false);
+            }
+        };
+        if (localStream) {
+            localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+        }
+        return peerConnection;
+    }
+
+    async function sendOffer() {
+        await ensurePeerConnection();
+        const offer = await peerConnection.createOffer();
+        await peerConnection.setLocalDescription(offer);
+        socket.emit('call_signal', { to_user_id: activeCall.peerId, signal: { type: 'offer', sdp: peerConnection.localDescription } });
+    }
+
+    async function finishCall(notifyPeer = true) {
+        stopCallClock();
+        stopRingtones();
+        if (notifyPeer && activeCall?.peerId) {
+            socket.emit('call_end', { to_user_id: activeCall.peerId, reason: 'Звонок завершён' });
+        }
+        if (peerConnection) {
+            peerConnection.close();
+            peerConnection = null;
+        }
+        if (screenStream) {
+            screenStream.getTracks().forEach(track => track.stop());
+            screenStream = null;
+        }
+        if (localStream) {
+            localStream.getTracks().forEach(track => track.stop());
+            localStream = null;
+        }
+        activeCall = null;
+        hideCallOverlay();
+    }
+
+    async function startOutgoingCall(kind = 'audio') {
+        if (chatType !== 'private' || activeCall) return;
+        activeCall = { peerId: peerMeta.id, username: peerMeta.username, avatar: peerMeta.avatar, kind };
+        showCallOverlay('outgoing', kind === 'video' ? 'Видео звонок...' : 'Звоним...', activeCall);
+        stopRingtones();
+        outgoingRingtone?.play().catch(() => {});
+        await ensureLocalStream({ audio: true, video: kind === 'video' });
+        socket.emit('call_invite', {
+            to_user_id: peerMeta.id,
+            chat_id: chatId,
+            kind,
+            from_id: currentUserId,
+            from_username: currentUsername,
+            from_avatar: currentUserAvatar
+        });
+    }
+
+    async function handleSignal(signal, fromUserId) {
+        if (signal.type === 'offer') {
+            await ensureLocalStream({ audio: true, video: activeCall?.kind === 'video' });
+            await ensurePeerConnection();
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            socket.emit('call_signal', { to_user_id: fromUserId, signal: { type: 'answer', sdp: peerConnection.localDescription } });
+            showCallOverlay('active', 'Соединяем...', activeCall);
+        } else if (signal.type === 'answer' && peerConnection) {
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+            showCallOverlay('active', 'Соединяем...', activeCall);
+        } else if (signal.type === 'ice' && peerConnection && signal.candidate) {
+            try { await peerConnection.addIceCandidate(new RTCIceCandidate(signal.candidate)); } catch (error) { console.error(error); }
+        }
+    }
+
+    startCallBtn?.addEventListener('click', () => startOutgoingCall('audio'));
+    startVideoBtn?.addEventListener('click', () => startOutgoingCall('video'));
+    callAcceptBtn?.addEventListener('click', async () => {
+        if (!activeCall) return;
+        stopRingtones();
+        showCallOverlay('active', 'Подключаемся...', activeCall);
+        await ensureLocalStream({ audio: true, video: activeCall.kind === 'video' });
+        socket.emit('call_accept', { to_user_id: activeCall.peerId, chat_id: activeCall.chatId, kind: activeCall.kind });
+    });
+    callDeclineBtn?.addEventListener('click', () => {
+        if (!activeCall) return;
+        socket.emit('call_decline', { to_user_id: activeCall.peerId, reason: 'Отклонено' });
+        finishCall(false);
+    });
+    callEndBtn?.addEventListener('click', () => finishCall(true));
+    callMicBtn?.addEventListener('click', async () => {
+        await ensureLocalStream({ audio: true });
+        const track = localStream.getAudioTracks()[0];
+        if (track) track.enabled = !track.enabled;
+        callMicBtn.classList.toggle('btn-danger', track && !track.enabled);
+    });
+    callSpeakerBtn?.addEventListener('click', () => {
+        isRemoteAudioEnabled = !isRemoteAudioEnabled;
+        remoteMedia.muted = !isRemoteAudioEnabled;
+        callSpeakerBtn.classList.toggle('btn-danger', !isRemoteAudioEnabled);
+    });
+    callCameraBtn?.addEventListener('click', async () => {
+        await ensureLocalStream({ audio: true, video: true });
+        const track = localStream.getVideoTracks()[0];
+        if (track) track.enabled = !track.enabled;
+        if (peerConnection && track) {
+            const sender = peerConnection.getSenders().find(item => item.track && item.track.kind === 'video');
+            if (sender) {
+                await sender.replaceTrack(track);
+            } else {
+                peerConnection.addTrack(track, localStream);
+                await sendOffer();
+            }
+        }
+        callCameraBtn.classList.toggle('btn-danger', track && !track.enabled);
+    });
+    callScreenBtn?.addEventListener('click', async () => {
+        if (!activeCall) return;
+        if (screenStream) {
+            screenStream.getTracks().forEach(track => track.stop());
+            screenStream = null;
+            callScreenBtn.classList.remove('btn-danger');
+            return;
+        }
+        try {
+            screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+            const screenTrack = screenStream.getVideoTracks()[0];
+            if (peerConnection) {
+                const sender = peerConnection.getSenders().find(item => item.track && item.track.kind === 'video');
+                if (sender) {
+                    await sender.replaceTrack(screenTrack);
+                } else {
+                    peerConnection.addTrack(screenTrack, screenStream);
+                    await sendOffer();
+                }
+            }
+            localPreview.srcObject = screenStream;
+            localPreview.style.display = 'block';
+            callScreenBtn.classList.add('btn-danger');
+            screenTrack.onended = async () => {
+                screenStream = null;
+                localPreview.srcObject = localStream;
+                if (peerConnection && localStream?.getVideoTracks()[0]) {
+                    const cameraTrack = localStream.getVideoTracks()[0];
+                    const sender = peerConnection.getSenders().find(item => item.track && item.track.kind === 'video');
+                    if (sender) await sender.replaceTrack(cameraTrack);
+                }
+                callScreenBtn.classList.remove('btn-danger');
+            };
+        } catch (error) {
+            console.error(error);
+        }
+    });
+
+    socket.on('call_invite', (data) => {
+        if (data.from_id === currentUserId || activeCall) return;
+        activeCall = { peerId: data.from_id, chatId: data.chat_id, username: data.from_username, avatar: data.from_avatar, kind: data.kind || 'audio' };
+        showCallOverlay('incoming', data.kind === 'video' ? 'Входящий видео звонок' : 'Входящий звонок', activeCall);
+        stopRingtones();
+        incomingRingtone?.play().catch(() => {});
+    });
+    socket.on('call_accepted', async (data) => {
+        if (!activeCall || data.from_id !== activeCall.peerId) return;
+        stopRingtones();
+        showCallOverlay('active', 'Соединяем...', activeCall);
+        await ensurePeerConnection();
+        await sendOffer();
+    });
+    socket.on('call_declined', (data) => {
+        if (activeCall && data.from_id === activeCall.peerId) {
+            alert(data.reason || 'Звонок отклонён');
+            finishCall(false);
+        }
+    });
+    socket.on('call_ended', (data) => {
+        if (activeCall && data.from_id === activeCall.peerId) finishCall(false);
+    });
+    socket.on('call_signal', async (data) => {
+        try {
+            if (!activeCall) activeCall = { peerId: data.from_id, username: peerMeta.username, avatar: peerMeta.avatar, kind: 'audio' };
+            await handleSignal(data.signal, data.from_id);
+        } catch (error) {
+            console.error(error);
+            finishCall(false);
+        }
     });
 </script>
 {% endif %}
@@ -2235,7 +2774,15 @@ def messenger():
 
     now = datetime.utcnow()
     online_ids = [u.id for u in friends if u.last_seen and (now - u.last_seen) < timedelta(minutes=5)]
-    return render_template('messenger.html', friends=friends, groups=groups, active_chat=active_chat, chat_type=chat_type, online_ids=online_ids)
+    return render_template(
+        'messenger.html',
+        friends=friends,
+        groups=groups,
+        active_chat=active_chat,
+        chat_type=chat_type,
+        online_ids=online_ids,
+        webrtc_ice_servers=WEBRTC_ICE_SERVERS
+    )
 
 @app.route('/create_group', methods=['POST'])
 @login_required
@@ -2261,7 +2808,10 @@ def create_group():
 @login_required
 def get_messages():
     type_ = request.args.get('type')
-    id_ = request.args.get('id')
+    try:
+        id_ = int(request.args.get('id', 0))
+    except (TypeError, ValueError):
+        return jsonify([])
     messages = []
     
     if type_ == 'private':
@@ -2303,9 +2853,14 @@ def get_messages():
 @login_required
 def send_api_message():
     type_ = request.form.get('type')
-    target_id = request.form.get('target_id')
-    body = request.form.get('body')
+    try:
+        target_id = int(request.form.get('target_id', 0))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Bad target'}), 400
+
+    body = normalize_text(request.form.get('body'))
     voice = request.files.get('voice')
+    client_token = request.form.get('client_token', '').strip()
     
     voice_url = None
     if voice:
@@ -2314,7 +2869,25 @@ def send_api_message():
     if not body and not voice_url:
         return jsonify({'error': 'Empty'}), 400
 
-    msg = Message(sender_id=current_user.id, body=body, voice_filename=voice_url)
+    if not consume_idempotency_token(f'message:{type_}:{target_id}', client_token):
+        return jsonify({'status': 'duplicate'}), 200
+
+    signature = f'{type_}:{target_id}:{body}:{bool(voice_url)}'
+    if recent_duplicate_signature(f'message-sig:{target_id}', signature):
+        return jsonify({'status': 'duplicate'}), 200
+
+    if type_ == 'private':
+        recipient = db.session.get(User, target_id)
+        if not recipient or recipient.username == 'admin' and not current_user.is_admin:
+            return jsonify({'error': 'Chat unavailable'}), 404
+    elif type_ == 'group':
+        group = db.session.get(Group, target_id)
+        if not group or current_user not in group.members:
+            return jsonify({'error': 'Access denied'}), 403
+    else:
+        return jsonify({'error': 'Bad type'}), 400
+
+    msg = Message(sender_id=current_user.id, body=body, voice_filename=voice_url, client_token=client_token or None)
     if type_ == 'private':
         msg.recipient_id = target_id
     elif type_ == 'group':
@@ -2331,7 +2904,7 @@ def send_api_message():
 def edit_message_api():
     data = request.get_json(force=True)
     mid = data.get('id')
-    text = data.get('text')
+    text = normalize_text(data.get('text'))
     msg = db.session.get(Message, mid)
     if msg and msg.sender_id == current_user.id and not msg.deleted_for_all:
         msg.body = text
@@ -2485,11 +3058,15 @@ def search():
     groups = []
     if q:
         if q.startswith('#'):
-            tag = q[1:]
-            posts = Post.query.filter(Post.content.ilike(f'%#{tag}%')).order_by(Post.timestamp.desc()).limit(20).all()
+            tag = re.sub(r'[^A-Za-z0-9_\.]+', '', q[1:])[:80]
+            if tag:
+                posts = Post.query.filter(
+                    Post.content.isnot(None),
+                    Post.content.ilike(f'%#{tag}%')
+                ).order_by(Post.timestamp.desc()).limit(20).all()
         else:
             users = User.query.filter(User.username.ilike(f'%{q}%')).limit(20).all()
-            posts = Post.query.filter(Post.content.ilike(f'%{q}%')).order_by(Post.timestamp.desc()).limit(20).all()
+            posts = Post.query.filter(Post.content.isnot(None), Post.content.ilike(f'%{q}%')).order_by(Post.timestamp.desc()).limit(20).all()
             groups = Group.query.filter(Group.name.ilike(f'%{q}%')).limit(20).all()
     return render_template('search.html', q=q, users=users, posts=posts, groups=groups)
 
@@ -2539,7 +3116,11 @@ def view_story(story_id):
 @app.route('/create_post', methods=['POST'])
 @login_required
 def create_post():
-    content = request.form.get('content')
+    content = normalize_text(request.form.get('content'))
+    client_token = request.form.get('client_token', '').strip()
+    if not consume_idempotency_token('create_post', client_token):
+        flash("Пост уже был отправлен. Дубликат остановлен.", "warning")
+        return redirect(url_for('index'))
     files = request.files.getlist('media')
     image_url, video_url = None, None
     media_items = []
@@ -2585,6 +3166,11 @@ def create_post():
     co_author = request.form.get('co_author', '').replace('@','').strip()
     co_author_user = User.query.filter_by(username=co_author).first() if co_author else None
     comments_enabled = not bool(request.form.get('disable_comments'))
+    duplicate_signature = f'{content}|{len(media_items)}|{bool(poll_data)}|{co_author_user.id if co_author_user else 0}|{comments_enabled}'
+
+    if recent_duplicate_signature('create_post_sig', duplicate_signature):
+        flash("Похоже, это повторный клик по посту. Второй пост не создан.", "warning")
+        return redirect(url_for('index'))
 
     if content or image_url or video_url or poll_data or media_items:
         post = Post(
@@ -2595,7 +3181,8 @@ def create_post():
             co_author_id=co_author_user.id if co_author_user else None,
             comments_enabled=comments_enabled,
             is_moderated=is_ok,
-            moderation_reason=reason if not is_ok else None
+            moderation_reason=reason if not is_ok else None,
+            client_token=client_token or None
         )
         db.session.add(post)
         db.session.flush()
@@ -2654,7 +3241,8 @@ def like_post(post_id):
 @app.route('/add_comment/<int:post_id>', methods=['POST'])
 @login_required
 def add_comment(post_id):
-    text = request.form.get('text')
+    text = normalize_text(request.form.get('text'))
+    client_token = request.form.get('client_token', '').strip()
     post = db.session.get(Post, post_id)
     if post and not post.comments_enabled:
         return redirect(url_for('index'))
@@ -2662,8 +3250,15 @@ def add_comment(post_id):
     # AI модерация комментариев
     is_ok, reason = moderate_content(text)
     
+    if not consume_idempotency_token(f'comment:{post_id}', client_token):
+        flash("Комментарий уже был отправлен. Дубликат остановлен.", "warning")
+        return redirect(url_for('index'))
+
     if text and is_ok:
-        db.session.add(Comment(text=text, user_id=current_user.id, post_id=post_id))
+        if recent_duplicate_signature(f'comment-sig:{post_id}', text):
+            flash("Похожий комментарий уже появился. Дубликат остановлен.", "warning")
+            return redirect(url_for('index'))
+        db.session.add(Comment(text=text, user_id=current_user.id, post_id=post_id, client_token=client_token or None))
         db.session.commit()
         if post and post.user_id != current_user.id:
             create_notification(post.user_id, 'comment', f'{current_user.username} прокомментировал ваш пост', link=url_for('post_view', post_id=post.id), from_user_id=current_user.id)
@@ -2756,6 +3351,11 @@ def on_join(data):
     room = data.get('room')
     join_room(room)
 
+@socketio.on('join_user_room')
+def on_join_user_room(data):
+    user_id = data.get('user_id') or current_user.id
+    join_room(f"user_{int(user_id)}")
+
 @socketio.on('typing')
 def on_typing(data):
     room = data.get('room_id')
@@ -2764,6 +3364,61 @@ def on_typing(data):
 @socketio.on('presence')
 def on_presence(data):
     emit('presence', {'user_id': current_user.id, 'online': data.get('online', True)}, broadcast=True)
+
+@socketio.on('call_invite')
+def on_call_invite(data):
+    to_user_id = data.get('to_user_id')
+    if not to_user_id:
+        return
+    emit('call_invite', {
+        'from_id': current_user.id,
+        'from_username': data.get('from_username'),
+        'from_avatar': data.get('from_avatar'),
+        'chat_id': data.get('chat_id'),
+        'kind': data.get('kind', 'audio')
+    }, to=f"user_{int(to_user_id)}")
+
+@socketio.on('call_accept')
+def on_call_accept(data):
+    to_user_id = data.get('to_user_id')
+    if not to_user_id:
+        return
+    emit('call_accepted', {
+        'from_id': current_user.id,
+        'chat_id': data.get('chat_id'),
+        'kind': data.get('kind', 'audio')
+    }, to=f"user_{int(to_user_id)}")
+
+@socketio.on('call_decline')
+def on_call_decline(data):
+    to_user_id = data.get('to_user_id')
+    if not to_user_id:
+        return
+    emit('call_declined', {
+        'from_id': current_user.id,
+        'reason': data.get('reason', 'Отклонено')
+    }, to=f"user_{int(to_user_id)}")
+
+@socketio.on('call_end')
+def on_call_end(data):
+    to_user_id = data.get('to_user_id')
+    if not to_user_id:
+        return
+    emit('call_ended', {
+        'from_id': current_user.id,
+        'reason': data.get('reason', 'Звонок завершён')
+    }, to=f"user_{int(to_user_id)}")
+
+@socketio.on('call_signal')
+def on_call_signal(data):
+    to_user_id = data.get('to_user_id')
+    signal = data.get('signal')
+    if not to_user_id or not signal:
+        return
+    emit('call_signal', {
+        'from_id': current_user.id,
+        'signal': signal
+    }, to=f"user_{int(to_user_id)}")
 
 # --- СОЗДАНИЕ ТАБЛИЦ И АДМИНА ---
 with app.app_context():
@@ -2779,6 +3434,7 @@ with app.app_context():
             conn.execute(text("ALTER TABLE posts ADD COLUMN IF NOT EXISTS edited_at TIMESTAMP;"))
             conn.execute(text("ALTER TABLE posts ADD COLUMN IF NOT EXISTS co_author_id INTEGER;"))
             conn.execute(text("ALTER TABLE posts ADD COLUMN IF NOT EXISTS comments_enabled BOOLEAN DEFAULT TRUE;"))
+            conn.execute(text("ALTER TABLE posts ADD COLUMN IF NOT EXISTS client_token VARCHAR(80);"))
 
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS banner VARCHAR(300);"))
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS color_theme VARCHAR(20) DEFAULT 'blue';"))
@@ -2790,6 +3446,8 @@ with app.app_context():
             conn.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS read_at TIMESTAMP;"))
             conn.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS deleted_for_all BOOLEAN DEFAULT FALSE;"))
             conn.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS deleted_for TEXT DEFAULT '[]';"))
+            conn.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS client_token VARCHAR(80);"))
+            conn.execute(text("ALTER TABLE comments ADD COLUMN IF NOT EXISTS client_token VARCHAR(80);"))
 
             conn.execute(text("ALTER TABLE groups ADD COLUMN IF NOT EXISTS description VARCHAR(300);"))
             conn.execute(text("ALTER TABLE groups ADD COLUMN IF NOT EXISTS is_private BOOLEAN DEFAULT FALSE;"))
