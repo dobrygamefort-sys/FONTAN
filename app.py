@@ -524,6 +524,13 @@ def linkify_text(text):
     return text
 
 app.jinja_env.filters['linkify'] = linkify_text
+def safe_from_json(value):
+    if value in (None, ''):
+        return {}
+    try:
+        return json.loads(value)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
 
 def create_notification(user_id, ntype, message=None, link=None, from_user_id=None):
     try:
@@ -910,6 +917,9 @@ templates = {
     </div>
     
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    {% if current_user.is_authenticated %}
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    {% endif %}
     <script>
         function toggleTheme() {
             fetch('/toggle_theme', { method: 'POST' })
@@ -1018,6 +1028,30 @@ templates = {
             formData.append('content', text);
             fetch(`/edit_post/${postId}`, { method: 'POST', body: formData }).then(() => location.reload());
         }
+
+        {% if current_user.is_authenticated %}
+        window.fontanBaseSocket = window.fontanBaseSocket || io();
+        if (!window.__fontanBaseCallInit) {
+            window.__fontanBaseCallInit = true;
+            window.fontanBaseSocket.on('connect', () => {
+                window.fontanBaseSocket.emit('join_user_room', { user_id: {{ current_user.id }} });
+            });
+            window.fontanBaseSocket.on('call_invite', (data) => {
+                if (window.__fontanMessengerHandlesCalls) return;
+                try {
+                    sessionStorage.setItem('pendingIncomingCall', JSON.stringify(data));
+                } catch (error) {
+                    console.error(error);
+                }
+                const shouldOpen = window.confirm(`Звонит ${data.from_username}. Открыть чат?`);
+                if (shouldOpen) {
+                    window.location.href = `/messenger?type=private&chat_id=${data.from_id}`;
+                } else {
+                    window.fontanBaseSocket.emit('call_decline', { to_user_id: data.from_id, reason: 'Отклонено' });
+                }
+            });
+        }
+        {% endif %}
     </script>
 </body>
 </html>
@@ -1446,12 +1480,6 @@ function votePoll(pollId, optionIndex) {
                         </h5>
                         <small class="text-muted">{{ follower.bio }}</small>
                     </div>
-                    <div class="d-flex gap-2">
-                        {% if chat_type == 'private' %}
-                        <button id="btn-start-call" class="btn btn-outline-success rounded-circle" title="Позвонить"><i class="bi bi-telephone-fill"></i></button>
-                        <button id="btn-start-video" class="btn btn-outline-primary rounded-circle" title="Видео"><i class="bi bi-camera-video-fill"></i></button>
-                        {% endif %}
-                    </div>
                 </div>
                 <div>
                     <a href="{{ url_for('profile', username=follower.username) }}" class="btn btn-primary btn-sm rounded-pill">Профиль</a>
@@ -1658,6 +1686,7 @@ function votePoll(pollId, optionIndex) {
 {% if active_chat %}
 <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 <script>
+    window.__fontanMessengerHandlesCalls = true;
     const chatBox = document.getElementById('chat-box');
     const chatType = document.getElementById('chat_type').value;
     const chatId = parseInt(document.getElementById('chat_id').value);
@@ -1702,6 +1731,22 @@ function votePoll(pollId, optionIndex) {
     let callTimerInterval = null;
     let callStartedAt = null;
     let isRemoteAudioEnabled = true;
+
+    try {
+        const pendingIncomingCall = JSON.parse(sessionStorage.getItem('pendingIncomingCall') || 'null');
+        if (pendingIncomingCall && pendingIncomingCall.from_id === chatId) {
+            activeCall = {
+                peerId: pendingIncomingCall.from_id,
+                chatId: pendingIncomingCall.chat_id,
+                username: pendingIncomingCall.from_username,
+                avatar: pendingIncomingCall.from_avatar,
+                kind: pendingIncomingCall.kind || 'audio'
+            };
+            sessionStorage.removeItem('pendingIncomingCall');
+        }
+    } catch (error) {
+        console.error(error);
+    }
 
     function escapeHtml(value) {
         return (value || '').replace(/[&<>\"']/g, char => ({
@@ -1912,6 +1957,15 @@ function votePoll(pollId, optionIndex) {
         remoteMedia.srcObject = null;
         localPreview.style.display = 'none';
         localPreview.srcObject = null;
+    }
+
+    if (activeCall) {
+        showCallOverlay(
+            'incoming',
+            activeCall.kind === 'video' ? 'Входящий видео звонок' : 'Входящий звонок',
+            activeCall
+        );
+        incomingRingtone?.play().catch(() => {});
     }
 
     function startCallClock() {
@@ -2519,7 +2573,7 @@ new Chart(document.getElementById('postsChart'), {
 """
 }
 
-app.jinja_env.filters['from_json'] = json.loads
+app.jinja_env.filters['from_json'] = safe_from_json
 app.jinja_loader = jinja2.DictLoader(templates)
 
 # --- ROUTES ---
@@ -3068,6 +3122,7 @@ def search():
             users = User.query.filter(User.username.ilike(f'%{q}%')).limit(20).all()
             posts = Post.query.filter(Post.content.isnot(None), Post.content.ilike(f'%{q}%')).order_by(Post.timestamp.desc()).limit(20).all()
             groups = Group.query.filter(Group.name.ilike(f'%{q}%')).limit(20).all()
+    posts = [post for post in posts if getattr(post, 'author', None)]
     return render_template('search.html', q=q, users=users, posts=posts, groups=groups)
 
 @app.route('/post/<int:post_id>')
