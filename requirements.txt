@@ -2,7 +2,11 @@ Flask
 Flask-SQLAlchemy
 Flask-Login
 Flask-SocketIO
+Flask-Mail
 cloudinary
 psycopg2-binary
 gunicorn
-eventlet  # Рекомендуется для работы SocketIO с gunicorn
+eventlet
+SQLAlchemy
+Werkzeug
+Jinja2
