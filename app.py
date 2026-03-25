@@ -246,7 +246,7 @@ class User(UserMixin, db.Model):
     email_confirmation_token = db.Column(db.String(100), unique=True, nullable=True)
     is_online = db.Column(db.Boolean, default=False)
     total_visits = db.Column(db.Integer, default=0)
-
+    telegram_id = db.Column(db.String(100), nullable=True)
 
     posts = db.relationship('Post', backref='author', lazy=True, foreign_keys='Post.user_id')
     likes = db.relationship('Like', backref='user', lazy=True)
@@ -4294,11 +4294,8 @@ def register():
         db.session.commit()
         
         session['temp_user_id'] = new_user.id
-        if send_verification_code(email):
-            return redirect(url_for('verify_email'))
-        else:
-            flash("Ошибка отправки кода на почту", "danger")
-            return redirect(url_for('register'))
+        # Новый пользователь — TG ID нет, идём настраивать
+        return redirect(url_for('setup_telegram'))
 
     captcha_q = generate_captcha()
     return render_template('auth.html', title="Регистрация", is_login=False, captcha_q=captcha_q)
@@ -4318,6 +4315,9 @@ def login():
                 return redirect(url_for('login'))
             
             session['temp_user_id'] = user.id
+            # Если TG ID не привязан — сначала настроить
+            if not user.telegram_id:
+                return redirect(url_for('setup_telegram'))
             if send_verification_code(user.email):
                 return redirect(url_for('verify_email'))
             else:
@@ -4327,6 +4327,37 @@ def login():
 
     captcha_q = generate_captcha()
     return render_template('auth.html', title="Вход", is_login=True, captcha_q=captcha_q)
+
+
+@app.route('/setup_telegram', methods=['GET', 'POST'])
+def setup_telegram():
+    """Страница привязки Telegram ID перед отправкой кода подтверждения."""
+    user_id = session.get('temp_user_id')
+    if not user_id:
+        return redirect(url_for('login'))
+
+    if request.method == 'POST':
+        tg_id = request.form.get('telegram_id', '').strip()
+        if not tg_id or not tg_id.isdigit():
+            flash("Введи корректный Telegram ID (только цифры)", "danger")
+            return redirect(url_for('setup_telegram'))
+
+        user = db.session.get(User, user_id)
+        if not user:
+            flash("Пользователь не найден", "danger")
+            return redirect(url_for('login'))
+
+        user.telegram_id = tg_id
+        db.session.commit()
+
+        if send_verification_code(user.email):
+            flash("Код отправлен в Telegram!", "success")
+            return redirect(url_for('verify_email'))
+        else:
+            flash("Ошибка отправки кода", "danger")
+            return redirect(url_for('setup_telegram'))
+
+    return render_template('setup_telegram.html')
 
 
 @app.route('/verify_email', methods=['GET', 'POST'])
@@ -4515,6 +4546,7 @@ with app.app_context():
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS email_confirmation_token VARCHAR(100);"))
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_online BOOLEAN DEFAULT FALSE;"))
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS total_visits INTEGER DEFAULT 0;"))
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_id VARCHAR(100);"))
 
             conn.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS edited_at TIMESTAMP;"))
             conn.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMP;"))
