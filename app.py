@@ -36,10 +36,15 @@ def send_verification_code(email):
     code = str(random.randint(100000, 999999))
     session['temp_code'] = code
     session['temp_email'] = email
-    msg = Message("Ваш код подтверждения Fontan",
-                  sender="fontanradiohelp@gmail.com",
-                  recipients=[email])
-    msg.body = f"Ваш код для входа/регистрации: {code}"
+    
+    # Исправленный блок Message
+    msg = Message(
+        subject="Ваш код подтверждения Fontan",
+        recipients=[email],  # Должно быть списком!
+        sender="fontanradiohelp@gmail.com",
+        body=f"Ваш код для входа/регистрации: {code}"
+    )
+    
     try:
         mail.send(msg)
         return True
