@@ -1,7 +1,8 @@
-# 1. ОБЯЗАТЕЛЬНО: Самые первые строки
+# 1. Сначала подготавливаем асинхронную среду (ОБЯЗАТЕЛЬНО ПЕРВАЯ СТРОКА)
 from gevent import monkey
 monkey.patch_all()
 
+# 2. Стандартные библиотеки Python
 import os
 import uuid
 import json
@@ -11,69 +12,48 @@ from pathlib import Path
 from urllib.parse import quote_plus
 from datetime import datetime, timedelta
 
-# 2. Облако
+# 3. Сторонние сервисы (Cloudinary)
 import cloudinary
 import cloudinary.uploader
 import cloudinary.api
 
-# 3. Flask и расширения
+# 4. Фреймворк Flask и расширения
 from flask import Flask, render_template, redirect, url_for, request, flash, jsonify, abort, session, send_from_directory
-from flask_mail import Mail, Message as MailMessage
+from flask_mail import Mail, Message as MailMessage # Переименовали, чтобы не было конфликта с БД
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from flask_socketio import SocketIO, emit, join_room, leave_room
 
-# 4. БД и утилиты
+# 5. Инструменты работы с данными и шаблонами
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import or_, and_, func, text
 import jinja2
-
 # --- НАСТРОЙКИ ПРИЛОЖЕНИЯ ---
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'fontan_ultra_admin_edition_v9_reset'
 
-# Настройки Flask-Mail
+# --- НАСТРОЙКИ FLASK-MAIL ---
 app.config['MAIL_SERVER'] = 'smtp.gmail.com'
 app.config['MAIL_PORT'] = 587
 app.config['MAIL_USE_TLS'] = True
-app.config['MAIL_USE_SSL'] = False  # Явно выключаем SSL, так как используем TLS на 587 порту
 app.config['MAIL_USERNAME'] = 'fontanradiohelp@gmail.com'
 app.config['MAIL_PASSWORD'] = 'zzub qrrg chjt vtvl'
-app.config['MAIL_DEFAULT_SENDER'] = 'fontanradiohelp@gmail.com'
-
 mail = Mail(app)
-db = SQLAlchemy(app)
-# Используем gevent для сокетов
-socketio = SocketIO(app, async_mode='gevent', cors_allowed_origins="*")
 
-# --- БЕЗОПАСНОЕ ОБНОВЛЕНИЕ БАЗЫ ---
-# Оборачиваем в функцию, чтобы база не "вешала" основной поток при старте
-def init_db():
-    with app.app_context():
-        try:
-            db.create_all()
-            # Если тут есть ALTER TABLE, они выполнятся только один раз успешно
-            print(">>> БАЗА ДАННЫХ ПОЛНОСТЬЮ ОБНОВЛЕНА <<<")
-        except Exception as e:
-            print(f"Ошибка базы при старте: {e}")
-
-init_db()
-
-# Исправленная функция отправки
 def send_verification_code(email):
     code = str(random.randint(100000, 999999))
     session['temp_code'] = code
     session['temp_email'] = email
-    
+
+    # Теперь используем MailMessage вместо Message
     msg = MailMessage(
         subject="Ваш код подтверждения Fontan",
         recipients=[email],
-        sender=app.config['MAIL_USERNAME'],
+        sender="fontanradiohelp@gmail.com",
         body=f"Ваш код для входа/регистрации: {code}"
     )
-    
+
     try:
-        # Важно: иногда на Render нужно небольшое время перед отправкой первого письма
         mail.send(msg)
         return True
     except Exception as e:
@@ -91,6 +71,7 @@ cloudinary.config(
 )
 
 # --- НАСТРОЙКА БД (NEON / RENDER) ---
+# --- 1. СНАЧАЛА НАСТРОЙКА ПУТИ К БАЗЕ ---
 NEON_DB_URL = os.environ.get('DATABASE_URL')
 if not NEON_DB_URL:
     # Твоя резервная ссылка
@@ -99,9 +80,17 @@ if not NEON_DB_URL:
 if NEON_DB_URL and NEON_DB_URL.startswith("postgres://"):
     NEON_DB_URL = NEON_DB_URL.replace("postgres://", "postgresql://", 1)
 
+# --- 2. ЗАПИСЫВАЕМ В КОНФИГ ПРИЛОЖЕНИЯ ---
 app.config['SQLALCHEMY_DATABASE_URI'] = NEON_DB_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {"pool_pre_ping": True, "pool_recycle": 300}
+
+# --- 3. И ТОЛЬКО ТЕПЕРЬ СОЗДАЕМ ОБЪЕКТ DB (СТРОГО ПОСЛЕ КОНФИГА!) ---
+db = SQLAlchemy(app) 
+
+# Остальные инициализации тоже должны быть ниже
+login_manager = LoginManager(app)
+socketio = SocketIO(app, async_mode='gevent', cors_allowed_origins="*")
 
 db = SQLAlchemy(app)
 login_manager = LoginManager(app)
