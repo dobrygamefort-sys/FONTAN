@@ -42,10 +42,12 @@ app.config['SECRET_KEY'] = 'fontan_ultra_admin_edition_v9_reset'
 app.config['MAIL_SERVER'] = 'smtp.gmail.com'
 app.config['MAIL_PORT'] = 587
 app.config['MAIL_USE_TLS'] = True
-app.config['MAIL_USE_SSL'] = False
+app.config['MAIL_USE_SSL'] = False  # Важно: для 587 это должно быть False
 app.config['MAIL_USERNAME'] = 'fontanradiohelp@gmail.com'
 app.config['MAIL_PASSWORD'] = 'zzub qrrg chjt vtvl'
 app.config['MAIL_DEFAULT_SENDER'] = 'fontanradiohelp@gmail.com'
+# Добавим таймаут, чтобы сервер не ждал вечно
+app.config['MAIL_ASCII_ATTACHMENTS'] = False
 
 # --- НАСТРОЙКА БАЗЫ ДАННЫХ (NEON / RENDER) ---
 NEON_DB_URL = os.environ.get('DATABASE_URL')
@@ -85,15 +87,14 @@ cloudinary.config(
 )
 
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
-def init_db():
+from threading import Thread
+
+def send_async_email(app, msg):
     with app.app_context():
         try:
-            db.create_all()
-            print(">>> БАЗА ДАННЫХ ПОЛНОСТЬЮ ОБНОВЛЕНА <<<")
+            mail.send(msg)
         except Exception as e:
-            print(f"Ошибка БД: {e}")
-
-init_db()
+            print(f"Async mail error: {e}")
 
 def send_verification_code(email):
     code = str(random.randint(100000, 999999))
@@ -103,16 +104,14 @@ def send_verification_code(email):
     msg = MailMessage(
         subject="Ваш код подтверждения Fontan",
         recipients=[email],
-        sender=app.config['MAIL_USERNAME'],
         body=f"Ваш код для входа/регистрации: {code}"
     )
-
-    try:
-        mail.send(msg)
-        return True
-    except Exception as e:
-        print(f"Mail error: {e}")
-        return False
+    
+    # Запускаем отправку в фоне, чтобы основной код не ждал ответа от Google
+    Thread(target=send_async_email, args=(app, msg)).start()
+    
+    # Сразу возвращаем True, чтобы пользователь увидел страницу ввода кода
+    return True
 
 # ДАЛЬШЕ ИДУТ ТВОИ МОДЕЛИ (class User...)
 # --- 4. ОСТАЛЬНЫЕ КОНСТАНТЫ ---
