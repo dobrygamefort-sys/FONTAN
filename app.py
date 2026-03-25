@@ -12,7 +12,7 @@ import cloudinary.uploader
 import cloudinary.api
 
 from flask import Flask, render_template, redirect, url_for, request, flash, jsonify, abort, session, send_from_directory
-from flask_mail import Mail, Message
+from flask_mail import Mail, Message as MailMessage
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -36,15 +36,15 @@ def send_verification_code(email):
     code = str(random.randint(100000, 999999))
     session['temp_code'] = code
     session['temp_email'] = email
-    
-    # Исправленный блок Message
-    msg = Message(
+
+    # Теперь используем MailMessage вместо Message
+    msg = MailMessage(
         subject="Ваш код подтверждения Fontan",
-        recipients=[email],  # Должно быть списком!
+        recipients=[email],
         sender="fontanradiohelp@gmail.com",
         body=f"Ваш код для входа/регистрации: {code}"
     )
-    
+
     try:
         mail.send(msg)
         return True
