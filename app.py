@@ -39,14 +39,14 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = 'fontan_ultra_admin_edition_v9_reset'
 
 # --- НАСТРОЙКИ ПОЧТЫ ---
+# --- НАСТРОЙКИ ПОЧТЫ (ОБНОВЛЕННЫЕ) ---
 app.config['MAIL_SERVER'] = 'smtp.gmail.com'
-app.config['MAIL_PORT'] = 587
-app.config['MAIL_USE_TLS'] = True
-app.config['MAIL_USE_SSL'] = False  # Важно: для 587 это должно быть False
+app.config['MAIL_PORT'] = 465
+app.config['MAIL_USE_TLS'] = False    # Для 465 TLS выключаем
+app.config['MAIL_USE_SSL'] = True     # Для 465 SSL включаем (это важно!)
 app.config['MAIL_USERNAME'] = 'fontanradiohelp@gmail.com'
 app.config['MAIL_PASSWORD'] = 'zzub qrrg chjt vtvl'
 app.config['MAIL_DEFAULT_SENDER'] = 'fontanradiohelp@gmail.com'
-# Добавим таймаут, чтобы сервер не ждал вечно
 app.config['MAIL_ASCII_ATTACHMENTS'] = False
 
 # --- НАСТРОЙКА БАЗЫ ДАННЫХ (NEON / RENDER) ---
