@@ -1,12 +1,19 @@
+# Основной фреймворк и расширения
 Flask
 Flask-SQLAlchemy
 Flask-Login
-Flask-SocketIO
 Flask-Mail
+Flask-SocketIO
+
+# Работа с облаком и БД
 cloudinary
 psycopg2-binary
+
+# Сервер и асинхронность (для SocketIO)
 gunicorn
 eventlet
+
+# Вспомогательные библиотеки (обычно идут с Flask, но лучше зафиксировать)
 SQLAlchemy
 Werkzeug
 Jinja2
