@@ -100,6 +100,7 @@ def send_verification_code(email):
     code = str(random.randint(100000, 999999))
     session['temp_code'] = code
     session['temp_email'] = email
+    print(f"\n[DEBUG] КОД ДЛЯ {email}: {code}\n")
 
     msg = MailMessage(
         subject="Ваш код подтверждения Fontan",
