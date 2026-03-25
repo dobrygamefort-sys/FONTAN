@@ -1,8 +1,8 @@
-# 1. Сначала подготавливаем асинхронную среду (ОБЯЗАТЕЛЬНО ПЕРВАЯ СТРОКА)
+# 1. ПОДГОТОВКА СРЕДЫ (СТРОГО ПЕРВАЯ СТРОКА)
 from gevent import monkey
 monkey.patch_all()
 
-# 2. Стандартные библиотеки Python
+# 2. СТАНДАРТНЫЕ БИБЛИОТЕКИ
 import os
 import uuid
 import json
@@ -12,44 +12,98 @@ from pathlib import Path
 from urllib.parse import quote_plus
 from datetime import datetime, timedelta
 
-# 3. Сторонние сервисы (Cloudinary)
+# 3. ОБЛАКО
 import cloudinary
 import cloudinary.uploader
 import cloudinary.api
 
-# 4. Фреймворк Flask и расширения
+# 4. FLASK И РАСШИРЕНИЯ
 from flask import Flask, render_template, redirect, url_for, request, flash, jsonify, abort, session, send_from_directory
-from flask_mail import Mail, Message as MailMessage # Переименовали, чтобы не было конфликта с БД
+from flask_mail import Mail, Message as MailMessage
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from flask_socketio import SocketIO, emit, join_room, leave_room
 
-# 5. Инструменты работы с данными и шаблонами
+# 5. ИНСТРУМЕНТЫ ДАННЫХ
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import or_, and_, func, text
 import jinja2
+
+# --- ИНИЦИАЛИЗАЦИЯ ОБЪЕКТОВ (БЕЗ ПРИВЯЗКИ К APP) ---
+db = SQLAlchemy()
+mail = Mail()
+login_manager = LoginManager()
+
 # --- НАСТРОЙКИ ПРИЛОЖЕНИЯ ---
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'fontan_ultra_admin_edition_v9_reset'
 
-# --- НАСТРОЙКИ FLASK-MAIL ---
+# --- НАСТРОЙКИ ПОЧТЫ ---
 app.config['MAIL_SERVER'] = 'smtp.gmail.com'
 app.config['MAIL_PORT'] = 587
 app.config['MAIL_USE_TLS'] = True
+app.config['MAIL_USE_SSL'] = False
 app.config['MAIL_USERNAME'] = 'fontanradiohelp@gmail.com'
 app.config['MAIL_PASSWORD'] = 'zzub qrrg chjt vtvl'
-mail = Mail(app)
+app.config['MAIL_DEFAULT_SENDER'] = 'fontanradiohelp@gmail.com'
+
+# --- НАСТРОЙКА БАЗЫ ДАННЫХ (NEON / RENDER) ---
+NEON_DB_URL = os.environ.get('DATABASE_URL')
+if not NEON_DB_URL:
+    NEON_DB_URL = 'postgresql://neondb_owner:npg_pIZeE3uY7XLF@ep-shy-field-ahelwpwv-pooler.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require' 
+
+if NEON_DB_URL and NEON_DB_URL.startswith("postgres://"):
+    NEON_DB_URL = NEON_DB_URL.replace("postgres://", "postgresql://", 1)
+
+app.config['SQLALCHEMY_DATABASE_URI'] = NEON_DB_URL
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    "pool_pre_ping": True, 
+    "pool_recycle": 300,
+    "connect_args": {"sslmode": "require"}
+}
+
+# --- ПРИВЯЗКА РАСШИРЕНИЙ (СТРОГО ОДИН РАЗ) ---
+db.init_app(app)
+mail.init_app(app)
+login_manager.init_app(app)
+login_manager.login_view = 'login'
+
+# SocketIO с поддержкой gevent
+socketio = SocketIO(app, async_mode='gevent', cors_allowed_origins="*")
+
+# --- КОНСТАНТЫ ---
+MEDIA_EXTENSIONS = ('.mp3', '.wav', '.ogg', '.webm', '.m4a')
+WEBRTC_ICE_SERVERS = [{"urls": ["stun:stun.l.google.com:19302"]}]
+
+# --- CLOUDINARY ---
+cloudinary.config(
+    cloud_name = 'daz4839e7', 
+    api_key = '371541773313745', 
+    api_secret = 'fumEMY1h-nsFKW8B5BCgix9EN-8',
+    secure = True
+)
+
+# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
+def init_db():
+    with app.app_context():
+        try:
+            db.create_all()
+            print(">>> БАЗА ДАННЫХ ПОЛНОСТЬЮ ОБНОВЛЕНА <<<")
+        except Exception as e:
+            print(f"Ошибка БД: {e}")
+
+init_db()
 
 def send_verification_code(email):
     code = str(random.randint(100000, 999999))
     session['temp_code'] = code
     session['temp_email'] = email
 
-    # Теперь используем MailMessage вместо Message
     msg = MailMessage(
         subject="Ваш код подтверждения Fontan",
         recipients=[email],
-        sender="fontanradiohelp@gmail.com",
+        sender=app.config['MAIL_USERNAME'],
         body=f"Ваш код для входа/регистрации: {code}"
     )
 
@@ -60,38 +114,7 @@ def send_verification_code(email):
         print(f"Mail error: {e}")
         return False
 
-
-
-# --- НАСТРОЙКИ CLOUDINARY (ТВОИ ДАННЫЕ ВСТАВЛЕНЫ) ---
-cloudinary.config(
-    cloud_name = 'daz4839e7', 
-    api_key = '371541773313745', 
-    api_secret = 'fumEMY1h-nsFKW8B5BCgix9EN-8',
-    secure = True
-)
-
-# --- НАСТРОЙКА БД (NEON / RENDER) ---
-# --- 1. СНАЧАЛА НАСТРОЙКА ПУТИ К БАЗЕ ---
-# --- 1. НАСТРОЙКА ПУТИ К БАЗЕ ---
-NEON_DB_URL = os.environ.get('DATABASE_URL')
-if not NEON_DB_URL:
-    NEON_DB_URL = 'postgresql://neondb_owner:npg_pIZeE3uY7XLF@ep-shy-field-ahelwpwv-pooler.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require' 
-
-if NEON_DB_URL and NEON_DB_URL.startswith("postgres://"):
-    NEON_DB_URL = NEON_DB_URL.replace("postgres://", "postgresql://", 1)
-
-# --- 2. ЗАПИСЫВАЕМ В КОНФИГ ---
-app.config['SQLALCHEMY_DATABASE_URI'] = NEON_DB_URL
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {"pool_pre_ping": True, "pool_recycle": 300}
-
-# --- 3. ИНИЦИАЛИЗАЦИЯ (СТРОГО ОДИН РАЗ!) ---
-db = SQLAlchemy(app) 
-login_manager = LoginManager(app)
-login_manager.login_view = 'login'
-# Оставляем SocketIO с async_mode='gevent'
-socketio = SocketIO(app, async_mode='gevent', cors_allowed_origins="*")
-
+# ДАЛЬШЕ ИДУТ ТВОИ МОДЕЛИ (class User...)
 # --- 4. ОСТАЛЬНЫЕ КОНСТАНТЫ ---
 MEDIA_EXTENSIONS = ('.mp3', '.wav', '.ogg', '.webm', '.m4a')
 WEBRTC_ICE_SERVERS = [{"urls": ["stun:stun.l.google.com:19302"]}]
