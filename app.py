@@ -12,6 +12,7 @@ import cloudinary.uploader
 import cloudinary.api
 
 from flask import Flask, render_template, redirect, url_for, request, flash, jsonify, abort, session, send_from_directory
+from flask_mail import Mail, Message
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -22,6 +23,31 @@ from flask_socketio import SocketIO, emit, join_room, leave_room
 # --- НАСТРОЙКИ ПРИЛОЖЕНИЯ ---
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'fontan_ultra_admin_edition_v9_reset'
+
+# --- НАСТРОЙКИ FLASK-MAIL ---
+app.config['MAIL_SERVER'] = 'smtp.gmail.com'
+app.config['MAIL_PORT'] = 587
+app.config['MAIL_USE_TLS'] = True
+app.config['MAIL_USERNAME'] = 'fontanradiohelp@gmail.com'
+app.config['MAIL_PASSWORD'] = 'zzub qrrg chjt vtvl'
+mail = Mail(app)
+
+def send_verification_code(email):
+    code = str(random.randint(100000, 999999))
+    session['temp_code'] = code
+    session['temp_email'] = email
+    msg = Message("Ваш код подтверждения Fontan",
+                  sender="fontanradiohelp@gmail.com",
+                  recipients=[email])
+    msg.body = f"Ваш код для входа/регистрации: {code}"
+    try:
+        mail.send(msg)
+        return True
+    except Exception as e:
+        print(f"Mail error: {e}")
+        return False
+
+
 
 # --- НАСТРОЙКИ CLOUDINARY (ТВОИ ДАННЫЕ ВСТАВЛЕНЫ) ---
 cloudinary.config(
@@ -192,6 +218,11 @@ class User(UserMixin, db.Model):
     is_admin = db.Column(db.Boolean, default=False)
     is_banned = db.Column(db.Boolean, default=False)
     is_verified = db.Column(db.Boolean, default=False)
+    email_confirmed = db.Column(db.Boolean, default=False)
+    email_confirmation_token = db.Column(db.String(100), unique=True, nullable=True)
+    is_online = db.Column(db.Boolean, default=False)
+    total_visits = db.Column(db.Integer, default=0)
+
 
     posts = db.relationship('Post', backref='author', lazy=True, foreign_keys='Post.user_id')
     likes = db.relationship('Like', backref='user', lazy=True)
@@ -371,6 +402,39 @@ class UserSession(db.Model):
     last_seen = db.Column(db.DateTime, default=datetime.utcnow)
     is_active = db.Column(db.Boolean, default=True)
 
+class FluxVideo(db.Model):
+    __tablename__ = 'flux_videos'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    video_url = db.Column(db.String(300), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    likes = db.Column(db.Integer, default=0)
+    views = db.Column(db.Integer, default=0)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+    author = db.relationship('User', backref='flux_videos')
+
+class FluxLike(db.Model):
+    __tablename__ = 'flux_likes'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    video_id = db.Column(db.Integer, db.ForeignKey('flux_videos.id'), nullable=False)
+
+class FluxComment(db.Model):
+    __tablename__ = 'flux_comments'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    video_id = db.Column(db.Integer, db.ForeignKey('flux_videos.id'), nullable=False)
+    text = db.Column(db.Text, nullable=False)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+    author = db.relationship('User', backref='flux_comments')
+
+class SiteStats(db.Model):
+    __tablename__ = 'site_stats'
+    id = db.Column(db.Integer, primary_key=True)
+    total_visitors = db.Column(db.Integer, default=0)
+    peak_online = db.Column(db.Integer, default=0)
+
+
 
 def ensure_user_sessions_schema():
     from sqlalchemy import text
@@ -399,6 +463,23 @@ def ensure_user_sessions_schema():
             db.session.execute(text("ALTER TABLE reports ADD COLUMN IF NOT EXISTS reason TEXT"))
             db.session.execute(text("ALTER TABLE reports ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'open'"))
             db.session.execute(text("ALTER TABLE reports ADD COLUMN IF NOT EXISTS timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP"))
+
+            # 6. Flux
+            db.session.execute(text("CREATE TABLE IF NOT EXISTS flux_videos (id SERIAL PRIMARY KEY, user_id INTEGER, video_url VARCHAR(300), description TEXT, likes INTEGER DEFAULT 0, views INTEGER DEFAULT 0, timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(user_id) REFERENCES users(id))"))
+            db.session.execute(text("ALTER TABLE flux_videos ADD COLUMN IF NOT EXISTS likes INTEGER DEFAULT 0"))
+            db.session.execute(text("CREATE TABLE IF NOT EXISTS flux_likes (id SERIAL PRIMARY KEY, user_id INTEGER, video_id INTEGER, FOREIGN KEY(user_id) REFERENCES users(id), FOREIGN KEY(video_id) REFERENCES flux_videos(id))"))
+            db.session.execute(text("CREATE TABLE IF NOT EXISTS flux_comments (id SERIAL PRIMARY KEY, user_id INTEGER, video_id INTEGER, text TEXT, timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(user_id) REFERENCES users(id), FOREIGN KEY(video_id) REFERENCES flux_videos(id))"))
+
+            # 7. Analytics
+            db.session.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_online BOOLEAN DEFAULT FALSE"))
+            db.session.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS total_visits INTEGER DEFAULT 0"))
+            db.session.execute(text("CREATE TABLE IF NOT EXISTS site_stats (id SERIAL PRIMARY KEY, total_visitors INTEGER DEFAULT 0, peak_online INTEGER DEFAULT 0)"))
+            db.session.execute(text("ALTER TABLE site_stats ADD COLUMN IF NOT EXISTS peak_online INTEGER DEFAULT 0"))
+            # Initialize stats if not exist
+            res = db.session.execute(text("SELECT count(*) FROM site_stats")).scalar()
+            if res == 0:
+                db.session.execute(text("INSERT INTO site_stats (total_visitors, peak_online) VALUES (0, 0)"))
+
 
             # 5. Сообщения
             db.session.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS read_at TIMESTAMP"))
@@ -441,6 +522,21 @@ def inject_counts():
     else:
         unread = 0
     return dict(unread_notifications=unread)
+
+@app.before_request
+def track_visitor():
+    if not session.get('tracked_visitor'):
+        stats = SiteStats.query.first()
+        if stats:
+            stats.total_visitors += 1
+            db.session.commit()
+        session['tracked_visitor'] = True
+    
+    if current_user.is_authenticated:
+        if not session.get('user_visit_counted'):
+            current_user.total_visits = (current_user.total_visits or 0) + 1
+            db.session.commit()
+            session['user_visit_counted'] = True
 
 # Проверка на бан
 @app.before_request
@@ -874,6 +970,7 @@ templates = {
             {% endif %}
             <div class="d-flex gap-3 align-items-center">
                 {% if current_user.is_authenticated %}
+                    <a class="nav-link text-white fs-5" href="{{ url_for('flux_feed') }}" title="Flux (Shorts)"><i class="bi bi-play-btn-fill"></i></a>
                     <span class="theme-toggle text-white" onclick="toggleTheme()">
                         <i class="bi bi-moon-stars-fill" id="theme-icon"></i>
                     </span>
@@ -2217,20 +2314,28 @@ function votePoll(pollId, optionIndex) {
 
     async function handleSignal(signal, fromUserId) {
         if (signal.type === 'offer') {
+            // Если звонок уже активен — это рenegotiation (напр. screen share),
+            // не сбрасываем UI и таймер
+            const isRenegotiation = activeCall && activeCall.mode === 'active';
             await ensureLocalStream({ audio: true, video: activeCall?.kind === 'video' });
             await ensurePeerConnection();
             await peerConnection.setRemoteDescription(new RTCSessionDescription(signal.sdp));
             const answer = await peerConnection.createAnswer();
             await peerConnection.setLocalDescription(answer);
             socket.emit('call_signal', { to_user_id: fromUserId, signal: { type: 'answer', sdp: peerConnection.localDescription } });
-            activeCall.mode = 'connecting';
-            startConnectTimeout();
-            showCallOverlay('active', 'Соединяем...', activeCall);
+            if (!isRenegotiation) {
+                activeCall.mode = 'connecting';
+                startConnectTimeout();
+                showCallOverlay('active', 'Соединяем...', activeCall);
+            }
         } else if (signal.type === 'answer' && peerConnection) {
+            const isRenegotiation = activeCall && activeCall.mode === 'active';
             await peerConnection.setRemoteDescription(new RTCSessionDescription(signal.sdp));
-            activeCall.mode = 'connecting';
-            startConnectTimeout();
-            showCallOverlay('active', 'Соединяем...', activeCall);
+            if (!isRenegotiation) {
+                activeCall.mode = 'connecting';
+                startConnectTimeout();
+                showCallOverlay('active', 'Соединяем...', activeCall);
+            }
         } else if (signal.type === 'ice' && peerConnection && signal.candidate) {
             try { await peerConnection.addIceCandidate(new RTCIceCandidate(signal.candidate)); } catch (error) { console.error(error); }
         }
@@ -2282,14 +2387,24 @@ function votePoll(pollId, optionIndex) {
             return;
         }
         try {
-            screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+            // Fix screen sharing: Use a new offer/answer cycle to stabilize the connection
+            screenStream = await navigator.mediaDevices.getDisplayMedia({ 
+                video: { cursor: "always" },
+                audio: false 
+            });
             const screenTrack = screenStream.getVideoTracks()[0];
+            
             if (peerConnection && screenTrack) {
-                await syncVideoSender(screenTrack, screenStream);
+                // Ensure the track is active before replacing
+                if (screenTrack.readyState === 'live') {
+                    await syncVideoSender(screenTrack, screenStream);
+                }
             }
+            
             localPreview.srcObject = screenStream;
             localPreview.style.display = 'block';
             callScreenBtn.classList.add('btn-danger');
+            
             screenTrack.onended = async () => {
                 screenStream = null;
                 localPreview.srcObject = localStream;
@@ -2300,9 +2415,11 @@ function votePoll(pollId, optionIndex) {
                 callScreenBtn.classList.remove('btn-danger');
             };
         } catch (error) {
-            console.error(error);
+            console.error("Screen share error:", error);
+            alert("Ошибка при включении демонстрации экрана");
         }
     });
+
 
     socket.on('call_invite', (data) => {
         if (data.from_id === currentUserId || activeCall) return;
@@ -2499,28 +2616,41 @@ function votePoll(pollId, optionIndex) {
 {% block content %}
 <div class="row justify-content-center">
   <div class="col-md-4">
-    <div class="card p-4 mt-5">
-      <h3 class="text-center">{{ title }}</h3>
+    <div class="card p-4 mt-5 shadow-lg border-0" style="border-radius: 20px;">
+      <h3 class="text-center mb-4 fw-bold">{{ title }}</h3>
+      
+      {% if show_verify %}
+      <div class="alert alert-info small">Код отправлен на вашу почту.</div>
       <form method="POST">
-        {% if not is_login %}
-        <input type="email" name="email" class="form-control mb-3" placeholder="Email" required>
-        {% endif %}
-        <input type="text" name="username" class="form-control mb-3" placeholder="Ник" required>
-        <input type="password" name="password" class="form-control mb-3" placeholder="Пароль" required>
-        <div class="mb-3">
-          <label class="form-label text-muted small">Капча: {{ captcha_q }}</label>
-          <input type="text" name="captcha" class="form-control" placeholder="Ответ" required>
-        </div>
-        <button class="btn btn-primary w-100">{{ title }}</button>
+        <input type="hidden" name="action" value="verify_code">
+        <input type="text" name="verify_code" class="form-control mb-3 rounded-pill text-center" placeholder="6-значный код" required maxlength="6" style="font-size: 1.5rem; letter-spacing: 5px;">
+        <button class="btn btn-primary w-100 rounded-pill py-2 fw-bold">Подтвердить</button>
       </form>
-      <div class="text-center mt-3">
-        <a href="{{ url_for('login' if not is_login else 'register') }}">{{ 'Войти' if not is_login else 'Регистрация' }}</a>
+      {% else %}
+      <form method="POST">
+        <input type="hidden" name="action" value="send_code">
+        {% if not is_login %}
+        <input type="email" name="email" class="form-control mb-3 rounded-pill" placeholder="Email" required>
+        {% endif %}
+        <input type="text" name="username" class="form-control mb-3 rounded-pill" placeholder="Ник" required>
+        <input type="password" name="password" class="form-control mb-3 rounded-pill" placeholder="Пароль" required>
+        <div class="mb-3">
+          <label class="form-label text-muted small ms-2">Капча: {{ captcha_q }}</label>
+          <input type="text" name="captcha" class="form-control rounded-pill" placeholder="Ответ" required>
+        </div>
+        <button class="btn btn-primary w-100 rounded-pill py-2 fw-bold">{{ 'Войти' if is_login else 'Зарегистрироваться' }}</button>
+      </form>
+      {% endif %}
+      
+      <div class="text-center mt-4">
+        <a href="{{ url_for('login' if not is_login else 'register') }}" class="text-decoration-none text-primary">{{ 'Уже есть аккаунт? Войти' if not is_login else 'Нет аккаунта? Регистрация' }}</a>
       </div>
     </div>
   </div>
 </div>
 {% endblock %}
 """,
+
     'notifications.html': """
 {% extends "base.html" %}
 {% block content %}
@@ -2549,35 +2679,112 @@ function votePoll(pollId, optionIndex) {
     'admin_dashboard.html': """
 {% extends "base.html" %}
 {% block content %}
-<div class="row">
-  <div class="col-md-8">
-    <h3 class="mb-3">Админ-дашборд</h3>
-    <canvas id="usersChart" height="120"></canvas>
-    <canvas id="postsChart" height="120" class="mt-4"></canvas>
-  </div>
-  <div class="col-md-4">
-    <div class="card p-3 mb-3">
-      <h5>Массовая рассылка</h5>
-      <form method="POST" action="{{ url_for('admin_broadcast') }}">
-        <textarea name="message" class="form-control mb-2" rows="3" placeholder="Сообщение всем"></textarea>
-        <button class="btn btn-primary w-100">Отправить</button>
-      </form>
-    </div>
-    <div class="card p-3">
-      <a href="{{ url_for('admin_reports') }}" class="btn btn-outline-danger w-100">Жалобы</a>
-    </div>
-  </div>
+<style>
+    .admin-stat {
+        background: linear-gradient(135deg, var(--grad-a), var(--grad-b));
+        color: #fff; border-radius: 20px; padding: 22px 20px; text-align: center; border: none;
+        box-shadow: 0 4px 20px rgba(0,0,0,.15);
+    }
+    .admin-stat h2 { font-size: 2.2rem; font-weight: 800; margin: 0; }
+    .admin-stat p { margin: 4px 0 0; opacity: .85; font-size: .9rem; }
+    .online-user-row { display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid var(--border-color); }
+    .online-dot { width:9px; height:9px; background:#22c55e; border-radius:50%; flex-shrink:0; }
+</style>
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h3 class="fw-bold mb-0"><i class="bi bi-shield-fill-check me-2 text-danger"></i>Панель Администратора</h3>
+    <span class="badge bg-danger fs-6 rounded-pill px-3">ADMIN</span>
 </div>
+
+<!-- Stats Row -->
+<div class="row g-3 mb-4">
+    <div class="col-6 col-md-3">
+        <div class="admin-stat" style="--grad-a:#2563eb; --grad-b:#1d4ed8;">
+            <h2>{{ online_count }}</h2>
+            <p><i class="bi bi-circle-fill" style="color:#86efac;"></i> Онлайн сейчас</p>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="admin-stat" style="--grad-a:#7c3aed; --grad-b:#5b21b6;">
+            <h2>{{ peak_online }}</h2>
+            <p><i class="bi bi-graph-up-arrow"></i> Пик онлайн</p>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="admin-stat" style="--grad-a:#f97316; --grad-b:#ea580c;">
+            <h2>{{ total_visitors }}</h2>
+            <p><i class="bi bi-people-fill"></i> Всего посещений</p>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="admin-stat" style="--grad-a:#059669; --grad-b:#047857;">
+            <h2>{{ total_users }}</h2>
+            <p><i class="bi bi-person-check-fill"></i> Пользователей</p>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="admin-stat" style="--grad-a:#db2777; --grad-b:#be185d;">
+            <h2>{{ total_posts }}</h2>
+            <p><i class="bi bi-file-post-fill"></i> Всего постов</p>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="admin-stat" style="--grad-a:#0891b2; --grad-b:#0e7490;">
+            <h2>{{ total_flux }}</h2>
+            <p><i class="bi bi-play-btn-fill"></i> Flux видео</p>
+        </div>
+    </div>
+    <div class="col-12 col-md-6">
+        <div class="card p-3 h-100">
+            <h6 class="fw-bold mb-3">Быстрые действия</h6>
+            <div class="d-flex flex-wrap gap-2">
+                <a href="{{ url_for('admin_reports') }}" class="btn btn-outline-danger rounded-pill"><i class="bi bi-flag-fill me-1"></i>Жалобы</a>
+                <a href="{{ url_for('users_list') }}" class="btn btn-outline-primary rounded-pill"><i class="bi bi-people-fill me-1"></i>Все пользователи</a>
+            </div>
+            <hr>
+            <h6 class="fw-bold mb-2">Рассылка всем</h6>
+            <form method="POST" action="{{ url_for('admin_broadcast') }}" class="d-flex gap-2">
+                <input type="text" name="message" class="form-control rounded-pill" placeholder="Введите сообщение..." required>
+                <button class="btn btn-primary rounded-pill px-4">Отправить</button>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Charts -->
+<div class="row g-3 mb-4">
+    <div class="col-md-6">
+        <div class="card p-3">
+            <h6 class="fw-bold mb-3">Новые пользователи (14 дней)</h6>
+            <canvas id="usersChart" height="160"></canvas>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card p-3">
+            <h6 class="fw-bold mb-3">Новые посты (14 дней)</h6>
+            <canvas id="postsChart" height="160"></canvas>
+        </div>
+    </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>
 const labels = {{ chart_labels|tojson }};
+const chartDefaults = {
+    fill: true,
+    tension: 0.4,
+    pointRadius: 3,
+    borderWidth: 2,
+};
 new Chart(document.getElementById('usersChart'), {
-  type: 'line',
-  data: { labels, datasets: [{ label: 'Новые пользователи', data: {{ users_data|tojson }}, borderColor:'#2563eb' }] }
+    type: 'line',
+    data: { labels, datasets: [{ ...chartDefaults, label: 'Пользователи', data: {{ users_data|tojson }}, borderColor:'#2563eb', backgroundColor:'rgba(37,99,235,.12)' }] },
+    options: { plugins:{ legend:{display:false} }, scales:{ y:{ beginAtZero:true, ticks:{stepSize:1} } } }
 });
 new Chart(document.getElementById('postsChart'), {
-  type: 'line',
-  data: { labels, datasets: [{ label: 'Посты', data: {{ posts_data|tojson }}, borderColor:'#f97316' }] }
+    type: 'line',
+    data: { labels, datasets: [{ ...chartDefaults, label: 'Посты', data: {{ posts_data|tojson }}, borderColor:'#f97316', backgroundColor:'rgba(249,115,22,.12)' }] },
+    options: { plugins:{ legend:{display:false} }, scales:{ y:{ beginAtZero:true, ticks:{stepSize:1} } } }
 });
 </script>
 {% endblock %}
@@ -2667,6 +2874,335 @@ new Chart(document.getElementById('postsChart'), {
 </div>
 {% endblock %}
 """,
+    'flux.html': """
+{% extends "base.html" %}
+{% block content %}
+<style>
+    body { background-color: #000 !important; color: #fff !important; }
+    .flux-page-wrap { max-width: 480px; margin: 0 auto; position: relative; }
+    .flux-container {
+        height: calc(100dvh - 70px);
+        overflow-y: scroll;
+        scroll-snap-type: y mandatory;
+        scroll-behavior: smooth;
+        -webkit-overflow-scrolling: touch;
+    }
+    .flux-container::-webkit-scrollbar { display: none; }
+    .flux-item {
+        height: calc(100dvh - 70px);
+        scroll-snap-align: start;
+        position: relative;
+        background: #000;
+    }
+    .flux-item video {
+        width: 100%; height: 100%; object-fit: cover;
+        display: block;
+    }
+    .flux-overlay {
+        position: absolute; bottom: 0; left: 0; right: 0;
+        background: linear-gradient(transparent 30%, rgba(0,0,0,0.75) 100%);
+        padding: 20px 16px 24px;
+        display: flex; justify-content: space-between; align-items: flex-end;
+    }
+    .flux-info { flex: 1; padding-right: 12px; }
+    .flux-info .username { font-weight: 700; font-size: 1rem; }
+    .flux-info .desc { font-size: 0.88rem; opacity: 0.9; margin-top: 4px; max-height: 60px; overflow: hidden; }
+    .flux-info .views-badge { font-size: 0.78rem; opacity: 0.65; margin-top: 6px; }
+    .flux-actions {
+        display: flex; flex-direction: column; gap: 18px; align-items: center; min-width: 56px;
+    }
+    .flux-btn {
+        background: rgba(255,255,255,0.12);
+        border: none; border-radius: 50%;
+        width: 52px; height: 52px; color: #fff; font-size: 22px;
+        display: flex; align-items: center; justify-content: center;
+        backdrop-filter: blur(8px);
+        cursor: pointer; transition: transform .15s, background .2s;
+    }
+    .flux-btn:hover { transform: scale(1.12); background: rgba(255,255,255,0.22); }
+    .flux-btn.liked { color: #ff4d4d; background: rgba(255,77,77,0.2); }
+    .flux-btn-label { font-size: 0.75rem; text-align: center; margin-top: -10px; opacity: 0.8; }
+    .flux-upload-fab {
+        position: fixed; bottom: 30px; right: 24px; z-index: 200;
+        background: linear-gradient(135deg, #4f46e5, #7c3aed);
+        border: none; border-radius: 50%; width: 56px; height: 56px;
+        color: #fff; font-size: 28px; display: flex; align-items: center; justify-content: center;
+        box-shadow: 0 6px 24px rgba(79,70,229,.5); cursor: pointer;
+    }
+    .flux-my-btn {
+        position: fixed; bottom: 96px; right: 24px; z-index: 200;
+        background: rgba(255,255,255,0.15);
+        border: none; border-radius: 50%; width: 46px; height: 46px;
+        color: #fff; font-size: 20px; display: flex; align-items: center; justify-content: center;
+        backdrop-filter: blur(10px); cursor: pointer;
+    }
+
+    /* Comment drawer */
+    .flux-comments-drawer {
+        position: fixed; bottom: 0; left: 50%; transform: translateX(-50%);
+        width: min(480px, 100vw); max-height: 60vh;
+        background: #1a1a2e; border-radius: 24px 24px 0 0;
+        z-index: 500; display: none; flex-direction: column;
+        box-shadow: 0 -4px 40px rgba(0,0,0,.6);
+    }
+    .flux-comments-drawer.open { display: flex; }
+    .drawer-header {
+        padding: 14px 20px 10px; display: flex; justify-content: space-between; align-items: center;
+        border-bottom: 1px solid rgba(255,255,255,0.08);
+    }
+    .drawer-comments-list { flex: 1; overflow-y: auto; padding: 12px 16px; }
+    .drawer-comment {
+        display: flex; gap: 10px; margin-bottom: 14px;
+    }
+    .drawer-comment-avatar {
+        width: 34px; height: 34px; border-radius: 50%; background: #4f46e5;
+        display: flex; align-items: center; justify-content: center; font-weight: 700; flex-shrink: 0;
+        overflow: hidden;
+    }
+    .drawer-comment-avatar img { width: 100%; height: 100%; object-fit: cover; }
+    .drawer-comment-body { flex: 1; }
+    .drawer-comment-name { font-size: 0.82rem; font-weight: 600; opacity: 0.8; }
+    .drawer-comment-text { font-size: 0.93rem; }
+    .drawer-input-row {
+        display: flex; gap: 10px; padding: 12px 16px;
+        border-top: 1px solid rgba(255,255,255,0.08);
+        background: #1a1a2e;
+    }
+    .drawer-input-row input {
+        flex: 1; background: rgba(255,255,255,0.08); border: none; border-radius: 20px;
+        padding: 10px 16px; color: #fff; font-size: 0.93rem;
+    }
+    .drawer-input-row input::placeholder { color: rgba(255,255,255,0.4); }
+    .drawer-input-row button {
+        background: #4f46e5; border: none; border-radius: 50%; width: 40px; height: 40px;
+        color: #fff; display: flex; align-items: center; justify-content: center;
+    }
+    .drawer-backdrop {
+        display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 499;
+    }
+    .drawer-backdrop.open { display: block; }
+</style>
+
+<div class="flux-page-wrap">
+    <div class="flux-container" id="flux-container">
+        {% for video in videos %}
+        <div class="flux-item" data-vid-id="{{ video.id }}">
+            <video src="{{ video.video_url }}" loop playsinline preload="metadata"
+                   onclick="togglePlay(this)"></video>
+            <div class="flux-overlay">
+                <div class="flux-info">
+                    <div class="username">@{{ video.author.username }}</div>
+                    {% if video.description %}
+                    <div class="desc">{{ video.description }}</div>
+                    {% endif %}
+                    <div class="views-badge">
+                        <i class="bi bi-eye-fill"></i> {{ video.views }}
+                    </div>
+                </div>
+                <div class="flux-actions">
+                    <div>
+                        <button class="flux-btn {% if current_user.id in video_likes[video.id] %}liked{% endif %}"
+                                onclick="likeFlux({{ video.id }}, this)" id="like-btn-{{ video.id }}">
+                            <i class="bi bi-heart-fill"></i>
+                        </button>
+                        <div class="flux-btn-label" id="like-count-{{ video.id }}">{{ video_likes[video.id]|length }}</div>
+                    </div>
+                    <div>
+                        <button class="flux-btn" onclick="openComments({{ video.id }})">
+                            <i class="bi bi-chat-dots-fill"></i>
+                        </button>
+                        <div class="flux-btn-label">{{ video_comments[video.id]|length }}</div>
+                    </div>
+                    <div>
+                        <button class="flux-btn" onclick="shareFlux('{{ video.video_url }}')">
+                            <i class="bi bi-share-fill"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% else %}
+        <div class="d-flex align-items-center justify-content-center" style="height:100%; color:#fff;">
+            <div class="text-center opacity-50">
+                <i class="bi bi-play-btn" style="font-size:4rem;"></i>
+                <h5 class="mt-3">Пока нет видео. Будь первым!</h5>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<!-- FABs -->
+<button class="flux-upload-fab" data-bs-toggle="modal" data-bs-target="#uploadFluxModal" title="Загрузить">
+    <i class="bi bi-plus-lg"></i>
+</button>
+<a href="{{ url_for('flux_my_videos') }}" class="flux-my-btn" title="Мои видео">
+    <i class="bi bi-person-video3"></i>
+</a>
+
+<!-- Comment Drawer -->
+<div class="drawer-backdrop" id="drawer-backdrop" onclick="closeComments()"></div>
+<div class="flux-comments-drawer" id="comments-drawer">
+    <div class="drawer-header">
+        <span class="fw-bold">Комментарии</span>
+        <button class="btn btn-sm text-white opacity-60" onclick="closeComments()" style="background:none; border:none;">
+            <i class="bi bi-x-lg fs-5"></i>
+        </button>
+    </div>
+    <div class="drawer-comments-list" id="drawer-comments-list">
+        <div class="text-center opacity-40 py-3 small">Загрузка...</div>
+    </div>
+    <div class="drawer-input-row">
+        <input type="text" id="comment-input" placeholder="Написать комментарий..." maxlength="300">
+        <button onclick="submitComment()"><i class="bi bi-send-fill"></i></button>
+    </div>
+</div>
+
+<!-- Upload Modal -->
+<div class="modal fade" id="uploadFluxModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content" style="background:#1a1a2e; color:#fff; border-radius:20px; border:1px solid rgba(255,255,255,.1);">
+            <div class="modal-header border-0 pb-0">
+                <h5 class="modal-title fw-bold"><i class="bi bi-play-btn-fill me-2" style="color:#7c3aed;"></i>Выложить Flux</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <form action="{{ url_for('upload_flux') }}" method="POST" enctype="multipart/form-data">
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label small opacity-60">Видео (вертикальный формат)</label>
+                        <input type="file" name="video" class="form-control"
+                               style="background:rgba(255,255,255,0.07); color:#fff; border-color:rgba(255,255,255,0.15);"
+                               accept="video/*" required>
+                    </div>
+                    <div class="mb-3">
+                        <textarea name="description" class="form-control"
+                                  style="background:rgba(255,255,255,0.07); color:#fff; border-color:rgba(255,255,255,0.15);"
+                                  rows="3" placeholder="Описание..."></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer border-0 pt-0">
+                    <button type="submit" class="btn w-100 rounded-pill fw-bold"
+                            style="background:linear-gradient(135deg,#4f46e5,#7c3aed); color:#fff;">
+                        Опубликовать <i class="bi bi-send-fill ms-1"></i>
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+    let currentCommentVideoId = null;
+    const allComments = {{ video_comments_data|tojson }};
+
+    // Auto-play on scroll
+    const container = document.getElementById('flux-container');
+    let currentVideo = null;
+
+    const observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            const video = entry.target.querySelector('video');
+            if (!video) return;
+            if (entry.isIntersecting) {
+                if (currentVideo && currentVideo !== video) {
+                    currentVideo.pause();
+                    currentVideo.currentTime = 0;
+                }
+                video.play().catch(() => {});
+                currentVideo = video;
+            } else {
+                video.pause();
+            }
+        });
+    }, { threshold: 0.7 });
+
+    document.querySelectorAll('.flux-item').forEach(item => observer.observe(item));
+
+    function togglePlay(video) {
+        if (video.paused) video.play();
+        else video.pause();
+    }
+
+    function likeFlux(id, btn) {
+        fetch(`/flux/like/${id}`, { method: 'POST' })
+            .then(r => r.json())
+            .then(data => {
+                if (data.liked) btn.classList.add('liked');
+                else btn.classList.remove('liked');
+                const countEl = document.getElementById(`like-count-${id}`);
+                if (countEl) countEl.textContent = data.likes_count;
+            });
+    }
+
+    function shareFlux(url) {
+        const full = url.startsWith('http') ? url : window.location.origin + url;
+        if (navigator.share) {
+            navigator.share({ url: full });
+        } else {
+            navigator.clipboard.writeText(full).then(() => {
+                const toast = document.createElement('div');
+                toast.className = 'position-fixed bottom-0 start-50 translate-middle-x mb-5';
+                toast.innerHTML = '<div class="alert alert-dark text-white px-4 py-2 rounded-pill shadow">Ссылка скопирована!</div>';
+                document.body.appendChild(toast);
+                setTimeout(() => toast.remove(), 2000);
+            });
+        }
+    }
+
+    function openComments(videoId) {
+        currentCommentVideoId = videoId;
+        const list = document.getElementById('drawer-comments-list');
+        const comments = allComments[videoId] || [];
+        if (comments.length === 0) {
+            list.innerHTML = '<div class="text-center opacity-40 py-4 small">Комментариев пока нет. Будь первым!</div>';
+        } else {
+            list.innerHTML = comments.map(c => `
+                <div class="drawer-comment">
+                    <div class="drawer-comment-avatar">
+                        ${c.avatar ? `<img src="${c.avatar}">` : c.username[0].toUpperCase()}
+                    </div>
+                    <div class="drawer-comment-body">
+                        <div class="drawer-comment-name">@${c.username}</div>
+                        <div class="drawer-comment-text">${c.text}</div>
+                    </div>
+                </div>
+            `).join('');
+        }
+        document.getElementById('comments-drawer').classList.add('open');
+        document.getElementById('drawer-backdrop').classList.add('open');
+    }
+
+    function closeComments() {
+        document.getElementById('comments-drawer').classList.remove('open');
+        document.getElementById('drawer-backdrop').classList.remove('open');
+        currentCommentVideoId = null;
+    }
+
+    async function submitComment() {
+        if (!currentCommentVideoId) return;
+        const input = document.getElementById('comment-input');
+        const text = input.value.trim();
+        if (!text) return;
+        const fd = new FormData();
+        fd.append('text', text);
+        const resp = await fetch(`/flux/comment/ajax/${currentCommentVideoId}`, { method: 'POST', body: fd });
+        const data = await resp.json();
+        if (data.ok) {
+            input.value = '';
+            // Add to local list
+            if (!allComments[currentCommentVideoId]) allComments[currentCommentVideoId] = [];
+            allComments[currentCommentVideoId].push({ username: data.username, avatar: data.avatar, text: data.text });
+            openComments(currentCommentVideoId);
+        }
+    }
+
+    document.getElementById('comment-input').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') submitComment();
+    });
+</script>
+{% endblock %}
+""",
+
     'users.html': """
 {% extends "base.html" %} 
 {% block content %} 
@@ -2698,6 +3234,106 @@ new Chart(document.getElementById('postsChart'), {
 {% endif %} 
 {% endfor %} 
 </div> 
+{% endblock %}
+""",
+
+    'flux_my_videos.html': """
+{% extends "base.html" %}
+{% block content %}
+<style>
+    .flux-stat-card {
+        background: linear-gradient(135deg, #1a1a2e, #16213e);
+        color: #fff;
+        border-radius: 20px;
+        padding: 24px;
+        text-align: center;
+        border: 1px solid rgba(255,255,255,0.08);
+    }
+    .flux-stat-card h2 { font-size: 2.4rem; font-weight: 800; margin: 0; }
+    .flux-stat-card p { opacity: 0.7; margin: 0; font-size: 0.9rem; }
+    .flux-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; }
+    .flux-thumb {
+        position: relative; border-radius: 16px; overflow: hidden; aspect-ratio: 9/16;
+        background: #000; cursor: pointer;
+    }
+    .flux-thumb video { width: 100%; height: 100%; object-fit: cover; }
+    .flux-thumb-overlay {
+        position: absolute; bottom: 0; left: 0; right: 0;
+        background: linear-gradient(transparent, rgba(0,0,0,0.85));
+        padding: 12px; color: #fff;
+    }
+    .flux-delete-btn {
+        position: absolute; top: 10px; right: 10px;
+        background: rgba(220,38,38,0.8); border: none; border-radius: 50%;
+        width: 34px; height: 34px; color: #fff; display: flex; align-items: center; justify-content: center;
+        backdrop-filter: blur(6px); cursor: pointer;
+    }
+</style>
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h3 class="fw-bold mb-0"><i class="bi bi-play-btn-fill me-2"></i>Мои Flux</h3>
+    <a href="{{ url_for('flux_feed') }}" class="btn btn-primary rounded-pill px-4">
+        <i class="bi bi-play-circle me-1"></i> Смотреть ленту
+    </a>
+</div>
+
+<!-- Аналитика -->
+<div class="row g-3 mb-4">
+    <div class="col-4">
+        <div class="flux-stat-card">
+            <h2>{{ stats.total_videos }}</h2>
+            <p><i class="bi bi-play-fill"></i> Видео</p>
+        </div>
+    </div>
+    <div class="col-4">
+        <div class="flux-stat-card">
+            <h2>{{ stats.total_views }}</h2>
+            <p><i class="bi bi-eye-fill"></i> Просмотров</p>
+        </div>
+    </div>
+    <div class="col-4">
+        <div class="flux-stat-card">
+            <h2>{{ stats.total_likes }}</h2>
+            <p><i class="bi bi-heart-fill"></i> Лайков</p>
+        </div>
+    </div>
+</div>
+
+{% if my_videos %}
+<div class="flux-grid">
+    {% for video in my_videos %}
+    <div class="flux-thumb">
+        <video src="{{ video.video_url }}" muted loop playsinline
+               onmouseover="this.play()" onmouseout="this.pause()"></video>
+        <div class="flux-thumb-overlay">
+            <div class="d-flex gap-3 mb-1">
+                <span><i class="bi bi-eye-fill"></i> {{ video.views }}</span>
+                <span><i class="bi bi-heart-fill" style="color:#ff4d4d"></i> {{ video.likes }}</span>
+                <span><i class="bi bi-chat-fill"></i> {{ video_comments[video.id] }}</span>
+            </div>
+            {% if video.description %}
+            <div class="small text-truncate opacity-75">{{ video.description }}</div>
+            {% endif %}
+            <div class="small opacity-50">{{ video.timestamp|time_ago }}</div>
+        </div>
+        <form method="POST" action="{{ url_for('delete_flux', video_id=video.id) }}"
+              onsubmit="return confirm('Удалить видео?')">
+            <button type="submit" class="flux-delete-btn" title="Удалить">
+                <i class="bi bi-trash-fill"></i>
+            </button>
+        </form>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="text-center py-5">
+    <i class="bi bi-camera-video" style="font-size:4rem; opacity:0.3;"></i>
+    <h5 class="mt-3 opacity-50">Ты ещё не выкладывал видео</h5>
+    <a href="{{ url_for('flux_feed') }}" class="btn btn-primary rounded-pill mt-3 px-5">
+        Выложить первое <i class="bi bi-plus-lg"></i>
+    </a>
+</div>
+{% endif %}
 {% endblock %}
 """
 }
@@ -3184,6 +3820,16 @@ def notifications():
 @login_required
 def admin_dashboard():
     if not current_user.is_admin: abort(403)
+    # Online now: active in last 5 min
+    online_count = User.query.filter(User.last_seen > datetime.utcnow() - timedelta(minutes=5)).count()
+    stats = SiteStats.query.first()
+    total_visitors = stats.total_visitors if stats else 0
+    peak_online = stats.peak_online if stats else 0
+    
+    total_users = User.query.count()
+    total_posts = Post.query.count()
+    total_flux = FluxVideo.query.count()
+    
     # последние 14 дней
     labels = []
     users_data = []
@@ -3195,7 +3841,11 @@ def admin_dashboard():
         posts_count = Post.query.filter(func.date(Post.timestamp) == day).count()
         users_data.append(users_count)
         posts_data.append(posts_count)
-    return render_template('admin_dashboard.html', chart_labels=labels, users_data=users_data, posts_data=posts_data)
+    return render_template('admin_dashboard.html',
+                           chart_labels=labels, users_data=users_data, posts_data=posts_data,
+                           online_count=online_count, total_visitors=total_visitors,
+                           peak_online=peak_online, total_users=total_users,
+                           total_posts=total_posts, total_flux=total_flux)
 
 @app.route('/admin/broadcast', methods=['POST'])
 @login_required
@@ -3457,6 +4107,105 @@ def add_comment(post_id):
     
     return redirect(url_for('index'))
 
+@app.route('/flux')
+@login_required
+def flux_feed():
+    # Session tracking to prevent duplicates
+    seen_ids = session.get('flux_seen_ids', [])
+    
+    # Get random video not in seen_ids
+    v = FluxVideo.query.filter(~FluxVideo.id.in_(seen_ids)).order_by(func.random()).first()
+    
+    if not v:
+        # Reset if all videos seen
+        session['flux_seen_ids'] = []
+        v = FluxVideo.query.order_by(func.random()).first()
+    
+    if v:
+        v.views += 1
+        seen_ids.append(v.id)
+        session['flux_seen_ids'] = seen_ids
+        session.modified = True
+        db.session.commit()
+    
+    videos = FluxVideo.query.order_by(func.random()).limit(20).all()
+    
+    video_likes = {}
+    video_comments = {}
+    video_comments_data = {}
+    for vid in videos:
+        video_likes[vid.id] = [l.user_id for l in FluxLike.query.filter_by(video_id=vid.id).all()]
+        comments = FluxComment.query.filter_by(video_id=vid.id).order_by(FluxComment.timestamp.desc()).limit(50).all()
+        video_comments[vid.id] = comments
+        video_comments_data[vid.id] = [
+            {
+                'username': c.author.username,
+                'avatar': c.author.avatar or '',
+                'text': c.text
+            } for c in comments
+        ]
+        
+    return render_template('flux.html', videos=videos, video_likes=video_likes,
+                           video_comments=video_comments, video_comments_data=video_comments_data)
+
+@app.route('/flux/upload', methods=['POST'])
+@login_required
+def upload_flux():
+    video = request.files.get('video')
+    desc = request.form.get('description')
+    if video:
+        # Handle video uploads to Cloudinary (resource_type="video").
+        url = upload_to_cloud(video, resource_type="video")
+        if url:
+            new_flux = FluxVideo(user_id=current_user.id, video_url=url, description=desc)
+            db.session.add(new_flux)
+            db.session.commit()
+            flash("Flux опубликован!", "success")
+    return redirect(url_for('flux_feed'))
+
+@app.route('/flux/like/<int:id>', methods=['POST'])
+@login_required
+def like_flux(id):
+    v = FluxVideo.query.get_or_404(id)
+    existing = FluxLike.query.filter_by(user_id=current_user.id, video_id=id).first()
+    if existing:
+        db.session.delete(existing)
+        v.likes = max(0, v.likes - 1)
+        db.session.commit()
+        return jsonify({'liked': False, 'likes_count': v.likes})
+    else:
+        db.session.add(FluxLike(user_id=current_user.id, video_id=id))
+        v.likes += 1
+        db.session.commit()
+        return jsonify({'liked': True, 'likes_count': v.likes})
+
+@app.route('/flux/comment/ajax/<int:id>', methods=['POST'])
+@login_required
+def comment_flux_ajax(id):
+    text = request.form.get('text', '').strip()
+    if not text:
+        return jsonify({'ok': False, 'error': 'Пустой комментарий'}), 400
+    if len(text) > 300:
+        return jsonify({'ok': False, 'error': 'Слишком длинный'}), 400
+    FluxVideo.query.get_or_404(id)
+    db.session.add(FluxComment(user_id=current_user.id, video_id=id, text=text))
+    db.session.commit()
+    return jsonify({
+        'ok': True,
+        'username': current_user.username,
+        'avatar': current_user.avatar or '',
+        'text': text
+    })
+
+@app.route('/flux/comment/<int:id>', methods=['POST'])
+@login_required
+def comment_flux(id):
+    text = request.form.get('text')
+    if text:
+        db.session.add(FluxComment(user_id=current_user.id, video_id=id, text=text))
+        db.session.commit()
+    return redirect(url_for('flux_feed'))
+
 @app.route('/delete_comment/<int:comment_id>')
 @login_required
 def delete_comment(comment_id):
@@ -3466,25 +4215,70 @@ def delete_comment(comment_id):
         db.session.commit()
     return redirect(url_for('index'))
 
+# Страница моих Flux-видео
+@app.route('/flux/my_videos')
+@login_required
+def flux_my_videos():
+    my_videos = FluxVideo.query.filter_by(user_id=current_user.id).order_by(FluxVideo.timestamp.desc()).all()
+    stats = {
+        'total_views': sum(v.views for v in my_videos),
+        'total_likes': sum(v.likes for v in my_videos),
+        'total_videos': len(my_videos),
+    }
+    video_comments = {v.id: FluxComment.query.filter_by(video_id=v.id).count() for v in my_videos}
+    return render_template('flux_my_videos.html', my_videos=my_videos, stats=stats, video_comments=video_comments)
+
+# Удалить своё Flux-видео
+@app.route('/flux/delete/<int:video_id>', methods=['POST'])
+@login_required
+def delete_flux(video_id):
+    video = FluxVideo.query.get_or_404(video_id)
+    if video.user_id != current_user.id and not current_user.is_admin:
+        abort(403)
+    FluxLike.query.filter_by(video_id=video_id).delete()
+    FluxComment.query.filter_by(video_id=video_id).delete()
+    db.session.delete(video)
+    db.session.commit()
+    flash("Видео удалено", "success")
+    return redirect(url_for('flux_my_videos'))
+
 @app.route('/register', methods=['GET', 'POST'])
 def register():
     if request.method == 'POST':
         if not validate_captcha(request.form.get('captcha')):
             flash("Неверная капча", "danger")
             return redirect(url_for('register'))
-        if User.query.filter_by(email=request.form.get('email')).first(): return redirect(url_for('register'))
-        new_user = User(email=request.form.get('email'), username=request.form.get('username'), password=generate_password_hash(request.form.get('password')))
+        
+        email = request.form.get('email')
+        username = request.form.get('username')
+        password = request.form.get('password')
+        
+        if User.query.filter_by(email=email).first():
+            flash("Этот email уже зарегистрирован.", "danger")
+            return redirect(url_for('register'))
+        if User.query.filter_by(username=username).first():
+            flash("Этот никнейм уже занят.", "danger")
+            return redirect(url_for('register'))
+        
+        new_user = User(
+            email=email,
+            username=username,
+            password=generate_password_hash(password),
+            email_confirmed=False
+        )
         db.session.add(new_user)
         db.session.commit()
-        login_user(new_user)
-        token = uuid.uuid4().hex
-        session['session_token'] = token
-        ip = get_client_ip()
-        db.session.add(UserSession(user_id=new_user.id, session_token=token, ip=ip, city=guess_city(ip), user_agent=request.headers.get('User-Agent')))
-        db.session.commit()
-        return redirect(url_for('index'))
+        
+        session['temp_user_id'] = new_user.id
+        if send_verification_code(email):
+            return redirect(url_for('verify_email'))
+        else:
+            flash("Ошибка отправки кода на почту", "danger")
+            return redirect(url_for('register'))
+
     captcha_q = generate_captcha()
     return render_template('auth.html', title="Регистрация", is_login=False, captcha_q=captcha_q)
+
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -3492,20 +4286,55 @@ def login():
         if not validate_captcha(request.form.get('captcha')):
             flash("Неверная капча", "danger")
             return redirect(url_for('login'))
+            
         user = User.query.filter_by(username=request.form.get('username')).first()
         if user and check_password_hash(user.password, request.form.get('password')):
             if user.is_banned:
                 flash("Вы забанены.", "danger")
+                return redirect(url_for('login'))
+            
+            session['temp_user_id'] = user.id
+            if send_verification_code(user.email):
+                return redirect(url_for('verify_email'))
             else:
+                flash("Ошибка отправки кода", "danger")
+        else:
+            flash("Неверный логин или пароль", "danger")
+
+    captcha_q = generate_captcha()
+    return render_template('auth.html', title="Вход", is_login=True, captcha_q=captcha_q)
+
+
+@app.route('/verify_email', methods=['GET', 'POST'])
+def verify_email():
+    if request.method == 'POST':
+        user_code = request.form.get('verify_code')
+        if user_code == session.get('temp_code'):
+            user_id = session.get('temp_user_id')
+            user = db.session.get(User, user_id)
+            if user:
+                user.email_confirmed = True
+                db.session.commit()
                 login_user(user)
+                
+                # Cleanup
+                session.pop('temp_user_id', None)
+                session.pop('temp_code', None)
+                session.pop('temp_email', None)
+                
                 token = uuid.uuid4().hex
                 session['session_token'] = token
                 ip = get_client_ip()
                 db.session.add(UserSession(user_id=user.id, session_token=token, ip=ip, city=guess_city(ip), user_agent=request.headers.get('User-Agent')))
                 db.session.commit()
+                
+                flash("Успешный вход!", "success")
                 return redirect(url_for('index'))
-    captcha_q = generate_captcha()
-    return render_template('auth.html', title="Вход", is_login=True, captcha_q=captcha_q)
+        else:
+            flash("Неверный код", "danger")
+    
+    return render_template('auth.html', title="Подтверждение", is_login=True, show_verify=True, captcha_q=generate_captcha())
+
 
 @app.route('/logout')
 @login_required
@@ -3529,7 +4358,40 @@ def logout_all():
     logout_user()
     return redirect(url_for('login'))
 
+@app.route('/confirm_email/<token>')
+def confirm_email(token):
+    user = User.query.filter_by(email_confirmation_token=token).first()
+    if user:
+        user.email_confirmed = True
+        user.email_confirmation_token = None
+        db.session.commit()
+        flash("Email подтвержден! Теперь вы можете войти.", "success")
+    else:
+        flash("Недействительная ссылка для подтверждения.", "danger")
+    return redirect(url_for('login'))
+
+
 # --- SOCKET.IO ---
+@socketio.on('connect')
+def on_connect():
+    if current_user.is_authenticated:
+        current_user.is_online = True
+        db.session.commit()
+        # Track peak online
+        online_count = User.query.filter_by(is_online=True).count()
+        stats = SiteStats.query.first()
+        if stats and online_count > (stats.peak_online or 0):
+            stats.peak_online = online_count
+            db.session.commit()
+        emit('user_status', {'user_id': current_user.id, 'status': 'online'}, broadcast=True)
+
+@socketio.on('disconnect')
+def on_disconnect():
+    if current_user.is_authenticated:
+        current_user.is_online = False
+        db.session.commit()
+        emit('user_status', {'user_id': current_user.id, 'status': 'offline'}, broadcast=True)
+
 @socketio.on('join')
 def on_join(data):
     room = data.get('room')
@@ -3624,6 +4486,11 @@ with app.app_context():
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS color_theme VARCHAR(20) DEFAULT 'blue';"))
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();"))
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen TIMESTAMP DEFAULT NOW();"))
+
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS email_confirmed BOOLEAN DEFAULT FALSE;"))
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS email_confirmation_token VARCHAR(100);"))
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_online BOOLEAN DEFAULT FALSE;"))
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS total_visits INTEGER DEFAULT 0;"))
 
             conn.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS edited_at TIMESTAMP;"))
             conn.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMP;"))
