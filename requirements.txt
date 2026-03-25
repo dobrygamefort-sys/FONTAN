@@ -9,11 +9,12 @@ Flask-SocketIO
 cloudinary
 psycopg2-binary
 
-# Сервер и асинхронность (для SocketIO)
+# Сервер и асинхронность (Рекомендуется gevent вместо eventlet для Python 3.13+)
 gunicorn
-eventlet
+gevent
+gevent-websocket
 
-# Вспомогательные библиотеки (обычно идут с Flask, но лучше зафиксировать)
+# Вспомогательные библиотеки
 SQLAlchemy
 Werkzeug
 Jinja2
