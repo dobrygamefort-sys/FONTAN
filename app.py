@@ -1,3 +1,8 @@
+# 1. Сначала подготавливаем асинхронную среду (ОБЯЗАТЕЛЬНО ПЕРВАЯ СТРОКА)
+from gevent import monkey
+monkey.patch_all()
+
+# 2. Стандартные библиотеки Python
 import os
 import uuid
 import json
@@ -6,20 +11,23 @@ import random
 from pathlib import Path
 from urllib.parse import quote_plus
 from datetime import datetime, timedelta
-# Подключаем Cloudinary
+
+# 3. Сторонние сервисы (Cloudinary)
 import cloudinary
 import cloudinary.uploader
 import cloudinary.api
 
+# 4. Фреймворк Flask и расширения
 from flask import Flask, render_template, redirect, url_for, request, flash, jsonify, abort, session, send_from_directory
-from flask_mail import Mail, Message as MailMessage
+from flask_mail import Mail, Message as MailMessage # Переименовали, чтобы не было конфликта с БД
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
+from flask_socketio import SocketIO, emit, join_room, leave_room
+
+# 5. Инструменты работы с данными и шаблонами
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import or_, and_, func, text
 import jinja2
-from flask_socketio import SocketIO, emit, join_room, leave_room
-
 # --- НАСТРОЙКИ ПРИЛОЖЕНИЯ ---
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'fontan_ultra_admin_edition_v9_reset'
