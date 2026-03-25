@@ -1,4 +1,4 @@
-# 1. ПОДГОТОВКА СРЕДЫ (СТРОГО ПЕРВАЯ СТРОКА)
+# 1. ПОДГОТОВКА СРЕДЫ
 from gevent import monkey
 monkey.patch_all()
 
@@ -8,6 +8,7 @@ import uuid
 import json
 import re
 import random
+import requests  # Для связи с Cloudflare
 from pathlib import Path
 from urllib.parse import quote_plus
 from datetime import datetime, timedelta
@@ -19,7 +20,6 @@ import cloudinary.api
 
 # 4. FLASK И РАСШИРЕНИЯ
 from flask import Flask, render_template, redirect, url_for, request, flash, jsonify, abort, session, send_from_directory
-from flask_mail import Mail, Message as MailMessage
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from flask_socketio import SocketIO, emit, join_room, leave_room
@@ -29,27 +29,19 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import or_, and_, func, text
 import jinja2
 
-# --- ИНИЦИАЛИЗАЦИЯ ОБЪЕКТОВ (БЕЗ ПРИВЯЗКИ К APP) ---
+# --- ИНИЦИАЛИЗАЦИЯ ОБЪЕКТОВ ---
 db = SQLAlchemy()
-mail = Mail()
 login_manager = LoginManager()
 
-# --- НАСТРОЙКИ ПРИЛОЖЕНИЯ ---
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'fontan_ultra_admin_edition_v9_reset'
 
-# --- НАСТРОЙКИ ПОЧТЫ ---
-# --- НАСТРОЙКИ ПОЧТЫ (ОБНОВЛЕННЫЕ) ---
-app.config['MAIL_SERVER'] = 'smtp.gmail.com'
-app.config['MAIL_PORT'] = 465
-app.config['MAIL_USE_TLS'] = False    # Для 465 TLS выключаем
-app.config['MAIL_USE_SSL'] = True     # Для 465 SSL включаем (это важно!)
-app.config['MAIL_USERNAME'] = 'fontanradiohelp@gmail.com'
-app.config['MAIL_PASSWORD'] = 'zzub qrrg chjt vtvl'
-app.config['MAIL_DEFAULT_SENDER'] = 'fontanradiohelp@gmail.com'
-app.config['MAIL_ASCII_ATTACHMENTS'] = False
+# --- НАСТРОЙКИ МОСТА (CLOUDFLARE + TELEGRAM) ---
+CF_WORKER_URL = "https://fontan.arthur-kgame1.workers.dev"
+# ВСТАВЬ СВОЙ ID ИЗ @userinfobot НИЖЕ:
+ADMIN_TG_ID = "1373304655" 
 
-# --- НАСТРОЙКА БАЗЫ ДАННЫХ (NEON / RENDER) ---
+# --- НАСТРОЙКА БАЗЫ ДАННЫХ ---
 NEON_DB_URL = os.environ.get('DATABASE_URL')
 if not NEON_DB_URL:
     NEON_DB_URL = 'postgresql://neondb_owner:npg_pIZeE3uY7XLF@ep-shy-field-ahelwpwv-pooler.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require' 
@@ -59,24 +51,12 @@ if NEON_DB_URL and NEON_DB_URL.startswith("postgres://"):
 
 app.config['SQLALCHEMY_DATABASE_URI'] = NEON_DB_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-    "pool_pre_ping": True, 
-    "pool_recycle": 300,
-    "connect_args": {"sslmode": "require"}
-}
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {"pool_pre_ping": True, "pool_recycle": 300, "connect_args": {"sslmode": "require"}}
 
-# --- ПРИВЯЗКА РАСШИРЕНИЙ (СТРОГО ОДИН РАЗ) ---
 db.init_app(app)
-mail.init_app(app)
 login_manager.init_app(app)
 login_manager.login_view = 'login'
-
-# SocketIO с поддержкой gevent
 socketio = SocketIO(app, async_mode='gevent', cors_allowed_origins="*")
-
-# --- КОНСТАНТЫ ---
-MEDIA_EXTENSIONS = ('.mp3', '.wav', '.ogg', '.webm', '.m4a')
-WEBRTC_ICE_SERVERS = [{"urls": ["stun:stun.l.google.com:19302"]}]
 
 # --- CLOUDINARY ---
 cloudinary.config(
@@ -87,56 +67,58 @@ cloudinary.config(
 )
 
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
-from threading import Thread
-
-def send_async_email(app, msg):
-    with app.app_context():
-        try:
-            mail.send(msg)
-        except Exception as e:
-            print(f"Async mail error: {e}")
 
 def send_verification_code(email):
     code = str(random.randint(100000, 999999))
     session['temp_code'] = code
     session['temp_email'] = email
-    print(f"\n[DEBUG] КОД ДЛЯ {email}: {code}\n")
+    
+    # Ищем пользователя в базе
+    user = User.query.filter_by(email=email).first()
+    
+    # Если у юзера нет ТГ, шлем админу
+    target_id = user.telegram_id if (user and hasattr(user, 'telegram_id') and user.telegram_id) else ADMIN_TG_ID
 
-    msg = MailMessage(
-        subject="Ваш код подтверждения Fontan",
-        recipients=[email],
-        body=f"Ваш код для входа/регистрации: {code}"
-    )
+    payload = {
+        "chat_id": target_id,
+        "text": f"<b>🔑 Код Fontan</b>\nДля: {email}\nКод: <code>{code}</code>"
+    }
+
+    try:
+        requests.post(CF_WORKER_URL, json=payload, timeout=5)
+    except Exception as e:
+        print(f"!!! [ОШИБКА]: {e}")
+        print(f"\n[DEBUG LOG] КОД: {code}\n")
     
-    # Запускаем отправку в фоне, чтобы основной код не ждал ответа от Google
-    Thread(target=send_async_email, args=(app, msg)).start()
-    
-    # Сразу возвращаем True, чтобы пользователь увидел страницу ввода кода
     return True
 
-# ДАЛЬШЕ ИДУТ ТВОИ МОДЕЛИ (class User...)
-# --- 4. ОСТАЛЬНЫЕ КОНСТАНТЫ ---
-MEDIA_EXTENSIONS = ('.mp3', '.wav', '.ogg', '.webm', '.m4a')
-WEBRTC_ICE_SERVERS = [{"urls": ["stun:stun.l.google.com:19302"]}]
+# --- ИНИЦИАЛИЗАЦИЯ БД ---
+with app.app_context():
+    try:
+        db.create_all()
+    except:
+        pass
 
-# --- ФУНКЦИЯ ЗАГРУЗКИ В ОБЛАКО ---
+# --- МОДЕЛИ ДАННЫХ ---
+class User(db.Model, UserMixin):
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    password = db.Column(db.String(255), nullable=False)
+    telegram_id = db.Column(db.String(100), nullable=True) # Поле для ID телеграма
+
+# --- ОСТАЛЬНЫЕ КОНСТАНТЫ И ФУНКЦИИ ---
+MEDIA_EXTENSIONS = ('.mp3', '.wav', '.ogg', '.webm', '.m4a')
+
 def upload_to_cloud(file_obj, resource_type="auto"):
     if not file_obj: return None
     try:
-        # Грузим в Cloudinary, папка fontan_app
-        upload_result = cloudinary.uploader.upload(
-            file_obj, 
-            resource_type=resource_type,
-            folder="fontan_app"
-        )
-        return upload_result['secure_url'] # Возвращаем вечную ссылку
-    except Exception as e:
-        print(f"Ошибка Cloudinary: {e}")
-        return None
+        res = cloudinary.uploader.upload(file_obj, resource_type=resource_type, folder="fontan_app")
+        return res['secure_url']
+    except: return None
 
 def allowed_file(filename):
-    ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'mp4', 'webm', 'mp3', 'wav', 'ogg'}
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+    ALLOWED = {'png', 'jpg', 'jpeg', 'gif', 'mp4', 'webm', 'mp3', 'wav', 'ogg'}
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED
 
 def normalize_text(value):
     return re.sub(r'\s+', ' ', (value or '').strip())
