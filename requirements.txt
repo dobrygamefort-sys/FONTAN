@@ -2,14 +2,14 @@
 Flask
 Flask-SQLAlchemy
 Flask-Login
-Flask-Mail
 Flask-SocketIO
 
 # Работа с облаком и БД
 cloudinary
 psycopg2-binary
+requests
 
-# Сервер и асинхронность (Рекомендуется gevent вместо eventlet для Python 3.13+)
+# Сервер и асинхронность
 gunicorn
 gevent
 gevent-websocket
@@ -18,3 +18,4 @@ gevent-websocket
 SQLAlchemy
 Werkzeug
 Jinja2
+python-dotenv
