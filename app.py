@@ -72,30 +72,27 @@ cloudinary.config(
 
 # --- НАСТРОЙКА БД (NEON / RENDER) ---
 # --- 1. СНАЧАЛА НАСТРОЙКА ПУТИ К БАЗЕ ---
+# --- 1. НАСТРОЙКА ПУТИ К БАЗЕ ---
 NEON_DB_URL = os.environ.get('DATABASE_URL')
 if not NEON_DB_URL:
-    # Твоя резервная ссылка
     NEON_DB_URL = 'postgresql://neondb_owner:npg_pIZeE3uY7XLF@ep-shy-field-ahelwpwv-pooler.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require' 
 
 if NEON_DB_URL and NEON_DB_URL.startswith("postgres://"):
     NEON_DB_URL = NEON_DB_URL.replace("postgres://", "postgresql://", 1)
 
-# --- 2. ЗАПИСЫВАЕМ В КОНФИГ ПРИЛОЖЕНИЯ ---
+# --- 2. ЗАПИСЫВАЕМ В КОНФИГ ---
 app.config['SQLALCHEMY_DATABASE_URI'] = NEON_DB_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {"pool_pre_ping": True, "pool_recycle": 300}
 
-# --- 3. И ТОЛЬКО ТЕПЕРЬ СОЗДАЕМ ОБЪЕКТ DB (СТРОГО ПОСЛЕ КОНФИГА!) ---
+# --- 3. ИНИЦИАЛИЗАЦИЯ (СТРОГО ОДИН РАЗ!) ---
 db = SQLAlchemy(app) 
-
-# Остальные инициализации тоже должны быть ниже
-login_manager = LoginManager(app)
-socketio = SocketIO(app, async_mode='gevent', cors_allowed_origins="*")
-
-db = SQLAlchemy(app)
 login_manager = LoginManager(app)
 login_manager.login_view = 'login'
-socketio = SocketIO(app, cors_allowed_origins="*")
+# Оставляем SocketIO с async_mode='gevent'
+socketio = SocketIO(app, async_mode='gevent', cors_allowed_origins="*")
+
+# --- 4. ОСТАЛЬНЫЕ КОНСТАНТЫ ---
 MEDIA_EXTENSIONS = ('.mp3', '.wav', '.ogg', '.webm', '.m4a')
 WEBRTC_ICE_SERVERS = [{"urls": ["stun:stun.l.google.com:19302"]}]
 
