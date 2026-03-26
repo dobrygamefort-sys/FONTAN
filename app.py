@@ -2649,7 +2649,7 @@ function votePoll(pollId, optionIndex) {
       <h3 class="text-center mb-4 fw-bold">{{ title }}</h3>
       
       {% if show_verify %}
-      <div class="alert alert-info small">Код отправлен на вашу почту.</div>
+      <div class="alert alert-info small">📲 Код отправлен в ваш Telegram!</div>
       <form method="POST">
         <input type="hidden" name="action" value="verify_code">
         <input type="text" name="verify_code" class="form-control mb-3 rounded-pill text-center" placeholder="6-значный код" required maxlength="6" style="font-size: 1.5rem; letter-spacing: 5px;">
@@ -2769,6 +2769,7 @@ function votePoll(pollId, optionIndex) {
             <div class="d-flex flex-wrap gap-2">
                 <a href="{{ url_for('admin_reports') }}" class="btn btn-outline-danger rounded-pill"><i class="bi bi-flag-fill me-1"></i>Жалобы</a>
                 <a href="{{ url_for('users_list') }}" class="btn btn-outline-primary rounded-pill"><i class="bi bi-people-fill me-1"></i>Все пользователи</a>
+                <a href="{{ url_for('admin_flux_list') }}" class="btn btn-outline-secondary rounded-pill"><i class="bi bi-play-btn-fill me-1"></i>Flux видео</a>
             </div>
             <hr>
             <h6 class="fw-bold mb-2">Рассылка всем</h6>
@@ -2816,6 +2817,72 @@ new Chart(document.getElementById('postsChart'), {
     options: { plugins:{ legend:{display:false} }, scales:{ y:{ beginAtZero:true, ticks:{stepSize:1} } } }
 });
 </script>
+{% endblock %}
+""",
+    'admin_flux.html': """
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h3 class="fw-bold mb-0"><i class="bi bi-play-btn-fill me-2 text-primary"></i>Управление Flux видео</h3>
+    <a href="{{ url_for('admin_dashboard') }}" class="btn btn-outline-secondary rounded-pill"><i class="bi bi-arrow-left me-1"></i>Назад</a>
+</div>
+<div class="row g-3 mb-4">
+    <div class="col-6 col-md-3">
+        <div class="card p-3 text-center border-0" style="background:linear-gradient(135deg,#2563eb,#1d4ed8);color:#fff;border-radius:16px;">
+            <h3 class="fw-bold mb-0">{{ total }}</h3>
+            <small>Всего видео</small>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="card p-3 text-center border-0" style="background:linear-gradient(135deg,#f97316,#ea580c);color:#fff;border-radius:16px;">
+            <h3 class="fw-bold mb-0">{{ total_views }}</h3>
+            <small>Всего просмотров</small>
+        </div>
+    </div>
+</div>
+<div class="card p-0 overflow-hidden">
+<table class="table table-hover mb-0" style="color:var(--text-color);">
+    <thead style="background:var(--hover-bg);">
+        <tr>
+            <th class="ps-3">ID</th>
+            <th>Автор</th>
+            <th>Описание</th>
+            <th>Просмотры</th>
+            <th>Лайки</th>
+            <th>Дата</th>
+            <th>Действие</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for v in videos %}
+    <tr>
+        <td class="ps-3 text-muted small">{{ v.id }}</td>
+        <td>
+            <a href="{{ url_for('profile', username=v.author.username) }}" class="text-decoration-none fw-semibold">
+                {{ v.author.username }}
+            </a>
+        </td>
+        <td class="text-muted small" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+            {{ v.description or '—' }}
+        </td>
+        <td><i class="bi bi-eye me-1"></i>{{ v.views }}</td>
+        <td><i class="bi bi-heart me-1 text-danger"></i>{{ v.likes }}</td>
+        <td class="text-muted small">{{ v.timestamp|time_ago }}</td>
+        <td>
+            <form method="POST" action="{{ url_for('admin_delete_flux', video_id=v.id) }}"
+                  onsubmit="return confirm('Удалить это видео?');" style="display:inline;">
+                <button type="submit" class="btn btn-sm btn-outline-danger rounded-pill">
+                    <i class="bi bi-trash-fill"></i> Удалить
+                </button>
+            </form>
+        </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="7" class="text-center text-muted py-4">Нет видео</td></tr>
+    {% endfor %}
+    </tbody>
+</table>
+</div>
 {% endblock %}
 """,
     'reports.html': """
@@ -3127,10 +3194,12 @@ new Chart(document.getElementById('postsChart'), {
     // Auto-play on scroll
     const container = document.getElementById('flux-container');
     let currentVideo = null;
+    const viewedSet = new Set(); // Дедупликация просмотров в рамках сессии браузера
 
     const observer = new IntersectionObserver((entries) => {
         entries.forEach(entry => {
             const video = entry.target.querySelector('video');
+            const vidId = entry.target.dataset.vidId;
             if (!video) return;
             if (entry.isIntersecting) {
                 if (currentVideo && currentVideo !== video) {
@@ -3139,6 +3208,11 @@ new Chart(document.getElementById('postsChart'), {
                 }
                 video.play().catch(() => {});
                 currentVideo = video;
+                // Считаем просмотр только один раз за сессию страницы
+                if (vidId && !viewedSet.has(vidId)) {
+                    viewedSet.add(vidId);
+                    fetch(`/flux/view/${vidId}`, { method: 'POST' });
+                }
             } else {
                 video.pause();
             }
@@ -3886,6 +3960,27 @@ def admin_broadcast():
             create_notification(u.id, 'system', msg, link=url_for('index'), from_user_id=current_user.id)
     return redirect(url_for('admin_dashboard'))
 
+@app.route('/admin/flux')
+@login_required
+def admin_flux_list():
+    if not current_user.is_admin: abort(403)
+    videos = FluxVideo.query.order_by(FluxVideo.timestamp.desc()).all()
+    total_views = sum(v.views for v in videos)
+    return render_template('admin_flux.html', videos=videos,
+                           total=len(videos), total_views=total_views)
+
+@app.route('/admin/flux/delete/<int:video_id>', methods=['POST'])
+@login_required
+def admin_delete_flux(video_id):
+    if not current_user.is_admin: abort(403)
+    video = FluxVideo.query.get_or_404(video_id)
+    FluxLike.query.filter_by(video_id=video_id).delete()
+    FluxComment.query.filter_by(video_id=video_id).delete()
+    db.session.delete(video)
+    db.session.commit()
+    flash("Видео удалено администратором.", "success")
+    return redirect(url_for('admin_flux_list'))
+
 @app.route('/admin/reports')
 @login_required
 def admin_reports():
@@ -4139,24 +4234,6 @@ def add_comment(post_id):
 @app.route('/flux')
 @login_required
 def flux_feed():
-    # Session tracking to prevent duplicates
-    seen_ids = session.get('flux_seen_ids', [])
-    
-    # Get random video not in seen_ids
-    v = FluxVideo.query.filter(~FluxVideo.id.in_(seen_ids)).order_by(func.random()).first()
-    
-    if not v:
-        # Reset if all videos seen
-        session['flux_seen_ids'] = []
-        v = FluxVideo.query.order_by(func.random()).first()
-    
-    if v:
-        v.views += 1
-        seen_ids.append(v.id)
-        session['flux_seen_ids'] = seen_ids
-        session.modified = True
-        db.session.commit()
-    
     videos = FluxVideo.query.order_by(func.random()).limit(20).all()
     
     video_likes = {}
@@ -4176,6 +4253,21 @@ def flux_feed():
         
     return render_template('flux.html', videos=videos, video_likes=video_likes,
                            video_comments=video_comments, video_comments_data=video_comments_data)
+
+@app.route('/flux/view/<int:id>', methods=['POST'])
+@login_required
+def track_flux_view(id):
+    """Счётчик просмотров: вызывается из JS один раз при реальном показе видео."""
+    viewed = session.get('flux_viewed_ids', [])
+    if id not in viewed:
+        v = FluxVideo.query.get(id)
+        if v:
+            v.views += 1
+            db.session.commit()
+        viewed.append(id)
+        session['flux_viewed_ids'] = viewed[-200:]
+        session.modified = True
+    return jsonify({'ok': True})
 
 @app.route('/flux/upload', methods=['POST'])
 @login_required
