@@ -49,7 +49,13 @@ app.config['SECRET_KEY'] = 'fontan_ultra_admin_edition_v9_reset'
 # --- НАСТРОЙКИ МОСТА (CLOUDFLARE + TELEGRAM) ---
 CF_WORKER_URL = "https://fontan.arthur-kgame1.workers.dev"
 # ВСТАВЬ СВОЙ ID ИЗ @userinfobot НИЖЕ:
-ADMIN_TG_ID = "1373304655" 
+ADMIN_TG_ID = "1373304655"
+
+# --- WEBRTC ICE СЕРВЕРЫ (STUN/TURN) ---
+WEBRTC_ICE_SERVERS = [
+    {"urls": "stun:stun.l.google.com:19302"},
+    {"urls": "stun:stun1.l.google.com:19302"},
+]
 
 # --- НАСТРОЙКА БАЗЫ ДАННЫХ ---
 NEON_DB_URL = os.environ.get('DATABASE_URL')
@@ -481,6 +487,9 @@ def ensure_user_sessions_schema():
             db.session.execute(text("ALTER TABLE notifications ADD COLUMN IF NOT EXISTS ntype VARCHAR(50) DEFAULT 'system'"))
             db.session.execute(text("ALTER TABLE notifications ADD COLUMN IF NOT EXISTS link VARCHAR(500)"))
             db.session.execute(text("ALTER TABLE notifications ADD COLUMN IF NOT EXISTS from_user_id INTEGER"))
+            # Фикс: старая колонка "type" (NOT NULL без дефолта) вызывала краш при вставке через ntype
+            db.session.execute(text("ALTER TABLE notifications ALTER COLUMN type DROP NOT NULL"))
+            db.session.execute(text("ALTER TABLE notifications ALTER COLUMN type SET DEFAULT 'system'"))
             
             # 3. Таблица stories
             db.session.execute(text("ALTER TABLE stories ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"))
