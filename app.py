@@ -30,10 +30,15 @@ from sqlalchemy import or_, and_, func, text
 import jinja2
 
 # --- ИНИЦИАЛИЗАЦИЯ ОБЪЕКТОВ ---
+# --- ИНИЦИАЛИЗАЦИЯ ОБЪЕКТОВ ---
 db = SQLAlchemy()
 login_manager = LoginManager()
 
-app = Flask(__name__)
+# Добавляем определение пути, чтобы Flask видел папку templates
+base_dir = os.path.abspath(os.path.dirname(__file__))
+
+app = Flask(__name__, template_folder=os.path.join(base_dir, 'templates'))
+
 app.config['SECRET_KEY'] = 'fontan_ultra_admin_edition_v9_reset'
 
 # --- НАСТРОЙКИ МОСТА (CLOUDFLARE + TELEGRAM) ---
