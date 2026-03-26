@@ -4362,8 +4362,17 @@ def setup_telegram():
             flash("Ошибка отправки кода", "danger")
             return redirect(url_for('setup_telegram'))
 
-    return render_template('setup_telegram.html')
-
+    # --- ПРЯМАЯ ЗАГРУЗКА ШАБЛОНА (ЧТОБЫ НЕ БЫЛО TemplateNotFound) ---
+    try:
+        return render_template('setup_telegram.html')
+    except Exception:
+        # Если Flask опять "ослеп", читаем файл руками
+        import os
+        template_path = os.path.join(app.root_path, 'templates', 'setup_telegram.html')
+        if os.path.exists(template_path):
+            with open(template_path, 'r', encoding='utf-8') as f:
+                return f.read()
+        return f"Критическая ошибка: файл не найден даже по пути {template_path}"
 
 @app.route('/verify_email', methods=['GET', 'POST'])
 def verify_email():
