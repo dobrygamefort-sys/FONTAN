@@ -4362,16 +4362,24 @@ def setup_telegram():
             flash("Ошибка отправки кода", "danger")
             return redirect(url_for('setup_telegram'))
 
-    # --- ПРЯМАЯ ЗАГРУЗКА ШАБЛОНА (ЧТОБЫ НЕ БЫЛО TemplateNotFound) ---
+    # --- ПРАВИЛЬНАЯ ЗАГРУЗКА ШАБЛОНА (БЕЗ ОШИБОК И ЛИШНЕГО КОДА НА ЭКРАНЕ) ---
     try:
+        # Пытаемся отрендерить стандартно
         return render_template('setup_telegram.html')
     except Exception:
-        # Если Flask опять "ослеп", читаем файл руками
+        # Если Flask опять "потерял" папку templates, читаем файл принудительно
         import os
+        from flask import render_template_string
+        
+        # Определяем путь к файлу шаблона
         template_path = os.path.join(app.root_path, 'templates', 'setup_telegram.html')
+        
         if os.path.exists(template_path):
             with open(template_path, 'r', encoding='utf-8') as f:
-                return f.read()
+                template_content = f.read()
+                # Используем render_template_string, чтобы убрать "кракозябры" со скрина
+                return render_template_string(template_content)
+        
         return f"Критическая ошибка: файл не найден даже по пути {template_path}"
 
 @app.route('/verify_email', methods=['GET', 'POST'])
