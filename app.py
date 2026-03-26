@@ -3082,7 +3082,7 @@ new Chart(document.getElementById('postsChart'), {
 <div class="flux-page-wrap">
     <div class="flux-container" id="flux-container">
         {% for video in videos %}
-        <div class="flux-item" data-vid-id="{{ video.id }}">
+        <div class="flux-item" id="video-{{ video.id }}" data-vid-id="{{ video.id }}">
             <video src="{{ video.video_url }}" loop playsinline preload="metadata"
                    onclick="togglePlay(this)"></video>
             <div class="flux-overlay">
@@ -3110,7 +3110,7 @@ new Chart(document.getElementById('postsChart'), {
                         <div class="flux-btn-label">{{ video_comments[video.id]|length }}</div>
                     </div>
                     <div>
-                        <button class="flux-btn" onclick="shareFlux('{{ video.video_url }}')">
+                        <button class="flux-btn" onclick="shareFlux({{ video.id }})">
                             <i class="bi bi-share-fill"></i>
                         </button>
                     </div>
@@ -3221,6 +3221,14 @@ new Chart(document.getElementById('postsChart'), {
 
     document.querySelectorAll('.flux-item').forEach(item => observer.observe(item));
 
+    // Авто-скролл к видео по якорю в URL (например /flux#video-42)
+    if (window.location.hash) {
+        const target = document.querySelector(window.location.hash);
+        if (target) {
+            setTimeout(() => target.scrollIntoView({ behavior: 'smooth', block: 'center' }), 300);
+        }
+    }
+
     function togglePlay(video) {
         if (video.paused) video.play();
         else video.pause();
@@ -3237,8 +3245,8 @@ new Chart(document.getElementById('postsChart'), {
             });
     }
 
-    function shareFlux(url) {
-        const full = url.startsWith('http') ? url : window.location.origin + url;
+    function shareFlux(videoId) {
+        const full = window.location.origin + '/flux#video-' + videoId;
         if (navigator.share) {
             navigator.share({ url: full });
         } else {
