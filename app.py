@@ -30,15 +30,20 @@ from sqlalchemy import or_, and_, func, text
 import jinja2
 
 # --- ИНИЦИАЛИЗАЦИЯ ОБЪЕКТОВ ---
-# --- ИНИЦИАЛИЗАЦИЯ ОБЪЕКТОВ ---
 db = SQLAlchemy()
 login_manager = LoginManager()
 
-# Добавляем определение пути, чтобы Flask видел папку templates
-base_dir = os.path.abspath(os.path.dirname(__file__))
+# 1. Получаем путь к папке, где лежит этот app.py
+current_dir = os.path.dirname(os.path.abspath(__file__))
+# 2. Собираем путь к папке templates
+template_path = os.path.join(current_dir, 'templates')
 
-app = Flask(__name__, template_folder=os.path.join(base_dir, 'templates'))
+# Печатаем в логи для отладки (ты увидишь это в панели Render)
+print(f">>> DEBUG: Текущая директория: {current_dir}")
+print(f">>> DEBUG: Ищу шаблоны в: {template_path}")
+print(f">>> DEBUG: Список файлов в templates: {os.listdir(template_path) if os.path.exists(template_path) else 'ПАПКА НЕ НАЙДЕНА'}")
 
+app = Flask(__name__, template_folder=template_path)
 app.config['SECRET_KEY'] = 'fontan_ultra_admin_edition_v9_reset'
 
 # --- НАСТРОЙКИ МОСТА (CLOUDFLARE + TELEGRAM) ---
