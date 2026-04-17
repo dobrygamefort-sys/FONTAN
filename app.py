@@ -1,70 +1,70 @@
-# 1. ПОДГОТОВКА СРЕДЫ
+# 1. РџРћР”Р“РћРўРћР’РљРђ РЎР Р•Р”Р«
 from gevent import monkey
 monkey.patch_all()
 
-# 2. СТАНДАРТНЫЕ БИБЛИОТЕКИ
+# 2. РЎРўРђРќР”РђР РўРќР«Р• Р‘РР‘Р›РРћРўР•РљР
 import os
 import uuid
 import json
 import re
 import random
-import requests  # Для связи с Cloudflare
+import requests  # Р”Р»СЏ СЃРІСЏР·Рё СЃ Cloudflare
 from pathlib import Path
 from urllib.parse import quote_plus
 from datetime import datetime, timedelta
 
-# 3. ОБЛАКО
+# 3. РћР‘Р›РђРљРћ
 import cloudinary
 import cloudinary.uploader
 import cloudinary.api
 
-# 4. FLASK И РАСШИРЕНИЯ
+# 4. FLASK Р Р РђРЎРЁРР Р•РќРРЇ
 from flask import Flask, render_template, redirect, url_for, request, flash, jsonify, abort, session, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from flask_socketio import SocketIO, emit, join_room, leave_room
 
-# 5. ИНСТРУМЕНТЫ ДАННЫХ
+# 5. РРќРЎРўР РЈРњР•РќРўР« Р”РђРќРќР«РҐ
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import or_, and_, func, text
 import jinja2
 
-# --- ИНИЦИАЛИЗАЦИЯ ОБЪЕКТОВ ---
+# --- РРќРР¦РРђР›РР—РђР¦РРЇ РћР‘РЄР•РљРўРћР’ ---
 db = SQLAlchemy()
 login_manager = LoginManager()
 
-# 1. Получаем путь к папке, где лежит этот app.py
+# 1. РџРѕР»СѓС‡Р°РµРј РїСѓС‚СЊ Рє РїР°РїРєРµ, РіРґРµ Р»РµР¶РёС‚ СЌС‚РѕС‚ app.py
 current_dir = os.path.dirname(os.path.abspath(__file__))
-# 2. Собираем путь к папке templates
+# 2. РЎРѕР±РёСЂР°РµРј РїСѓС‚СЊ Рє РїР°РїРєРµ templates
 template_path = os.path.join(current_dir, 'templates')
 
-# Печатаем в логи для отладки (ты увидишь это в панели Render)
-print(f">>> DEBUG: Текущая директория: {current_dir}")
-print(f">>> DEBUG: Ищу шаблоны в: {template_path}")
-print(f">>> DEBUG: Список файлов в templates: {os.listdir(template_path) if os.path.exists(template_path) else 'ПАПКА НЕ НАЙДЕНА'}")
+# РџРµС‡Р°С‚Р°РµРј РІ Р»РѕРіРё РґР»СЏ РѕС‚Р»Р°РґРєРё (С‚С‹ СѓРІРёРґРёС€СЊ СЌС‚Рѕ РІ РїР°РЅРµР»Рё Render)
+print(f">>> DEBUG: РўРµРєСѓС‰Р°СЏ РґРёСЂРµРєС‚РѕСЂРёСЏ: {current_dir}")
+print(f">>> DEBUG: РС‰Сѓ С€Р°Р±Р»РѕРЅС‹ РІ: {template_path}")
+print(f">>> DEBUG: РЎРїРёСЃРѕРє С„Р°Р№Р»РѕРІ РІ templates: {os.listdir(template_path) if os.path.exists(template_path) else 'РџРђРџРљРђ РќР• РќРђР™Р”Р•РќРђ'}")
 
 app = Flask(__name__, template_folder=template_path)
 app.config['SECRET_KEY'] = 'fontan_ultra_admin_edition_v9_reset'
 
-# --- НАСТРОЙКИ МОСТА (CLOUDFLARE + TELEGRAM) ---
+# --- РќРђРЎРўР РћР™РљР РњРћРЎРўРђ (CLOUDFLARE + TELEGRAM) ---
 CF_WORKER_URL = "https://fontan.arthur-kgame1.workers.dev"
-# ВСТАВЬ СВОЙ ID ИЗ @userinfobot НИЖЕ:
+# Р’РЎРўРђР’Р¬ РЎР’РћР™ ID РР— @userinfobot РќРР–Р•:
 ADMIN_TG_ID = "1373304655"
 
 # --- GROQ AI CONFIG ---
 GROQ_API_KEY = os.environ.get('GROQ_API_KEY', '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')
 GROQ_MODEL = "llama3-70b-8192"
-GROQ_COOLDOWN_SECONDS = 3   # минимум секунд между запросами от одного юзера
-GROQ_TIMEOUT_SECONDS = 15   # если нет ответа за 15с — "попробуй позже"
-AI_ADMIN_MODE = {}  # {chat_id: True} — в каком чате админ отвечает сам
+GROQ_COOLDOWN_SECONDS = 3   # РјРёРЅРёРјСѓРј СЃРµРєСѓРЅРґ РјРµР¶РґСѓ Р·Р°РїСЂРѕСЃР°РјРё РѕС‚ РѕРґРЅРѕРіРѕ СЋР·РµСЂР°
+GROQ_TIMEOUT_SECONDS = 15   # РµСЃР»Рё РЅРµС‚ РѕС‚РІРµС‚Р° Р·Р° 15СЃ вЂ” "РїРѕРїСЂРѕР±СѓР№ РїРѕР·Р¶Рµ"
+AI_ADMIN_MODE = {}  # {chat_id: True} вЂ” РІ РєР°РєРѕРј С‡Р°С‚Рµ Р°РґРјРёРЅ РѕС‚РІРµС‡Р°РµС‚ СЃР°Рј
 
-# --- WEBRTC ICE СЕРВЕРЫ (STUN/TURN) ---
+# --- WEBRTC ICE РЎР•Р Р’Р•Р Р« (STUN/TURN) ---
 WEBRTC_ICE_SERVERS = [
     {"urls": "stun:stun.l.google.com:19302"},
     {"urls": "stun:stun1.l.google.com:19302"},
 ]
 
-# --- НАСТРОЙКА БАЗЫ ДАННЫХ ---
+# --- РќРђРЎРўР РћР™РљРђ Р‘РђР—Р« Р”РђРќРќР«РҐ ---
 NEON_DB_URL = os.environ.get('DATABASE_URL')
 if not NEON_DB_URL:
     NEON_DB_URL = 'postgresql://neondb_owner:npg_pIZeE3uY7XLF@ep-shy-field-ahelwpwv-pooler.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require' 
@@ -89,42 +89,42 @@ cloudinary.config(
     secure = True
 )
 
-# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
+# --- Р’РЎРџРћРњРћР“РђРўР•Р›Р¬РќР«Р• Р¤РЈРќРљР¦РР ---
 
 def send_verification_code(email):
     code = str(random.randint(100000, 999999))
     session['temp_code'] = code
     session['temp_email'] = email
     
-    # Ищем пользователя в базе
+    # РС‰РµРј РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ РІ Р±Р°Р·Рµ
     user = User.query.filter_by(email=email).first()
     
-    # Если у юзера нет ТГ, шлем админу
+    # Р•СЃР»Рё Сѓ СЋР·РµСЂР° РЅРµС‚ РўР“, С€Р»РµРј Р°РґРјРёРЅСѓ
     target_id = user.telegram_id if (user and hasattr(user, 'telegram_id') and user.telegram_id) else ADMIN_TG_ID
 
     payload = {
         "chat_id": target_id,
-        "text": f"<b>🔑 Код Fontan</b>\nДля: {email}\nКод: <code>{code}</code>"
+        "text": f"<b>рџ”‘ РљРѕРґ Fontan</b>\nР”Р»СЏ: {email}\nРљРѕРґ: <code>{code}</code>"
     }
 
     try:
         requests.post(CF_WORKER_URL, json=payload, timeout=5)
     except Exception as e:
-        print(f"!!! [ОШИБКА]: {e}")
-        print(f"\n[DEBUG LOG] КОД: {code}\n")
+        print(f"!!! [РћРЁРР‘РљРђ]: {e}")
+        print(f"\n[DEBUG LOG] РљРћР”: {code}\n")
     
     return True
 
-# --- ИНИЦИАЛИЗАЦИЯ БД ---
+# --- РРќРР¦РРђР›РР—РђР¦РРЇ Р‘Р” ---
 with app.app_context():
     try:
         db.create_all()
     except:
         pass
 
-# --- МОДЕЛИ ДАННЫХ ---
+# --- РњРћР”Р•Р›Р Р”РђРќРќР«РҐ ---
 
-# --- ОСТАЛЬНЫЕ КОНСТАНТЫ И ФУНКЦИИ ---
+# --- РћРЎРўРђР›Р¬РќР«Р• РљРћРќРЎРўРђРќРўР« Р Р¤РЈРќРљР¦РР ---
 MEDIA_EXTENSIONS = ('.mp3', '.wav', '.ogg', '.webm', '.m4a')
 
 def upload_to_cloud(file_obj, resource_type="auto"):
@@ -201,41 +201,41 @@ def find_media_asset(asset_name):
                 return file_path
     return None
 
-# --- AI МОДЕРАЦИЯ КОНТЕНТА ---
+# --- AI РњРћР”Р•Р РђР¦РРЇ РљРћРќРўР•РќРўРђ ---
 def moderate_content(text):
-    """Улучшенная бесплатная AI модерация контента (эвристики + стоп-слова)"""
+    """РЈР»СѓС‡С€РµРЅРЅР°СЏ Р±РµСЃРїР»Р°С‚РЅР°СЏ AI РјРѕРґРµСЂР°С†РёСЏ РєРѕРЅС‚РµРЅС‚Р° (СЌРІСЂРёСЃС‚РёРєРё + СЃС‚РѕРї-СЃР»РѕРІР°)"""
     if not text:
         return True, ""
     
     forbidden_words = [
-        'спам', 'реклама', 'казино', 'ставки', 'наркотики',
-        'оружие', 'взлом', 'hack', 'porn', 'sex', 'nsfw', '18+',
-        'фишинг', 'обнал', 'крипта', 'профит', 'заработок',
-        'мошен', 'scam', 'leak', 'onlyfans'
+        'СЃРїР°Рј', 'СЂРµРєР»Р°РјР°', 'РєР°Р·РёРЅРѕ', 'СЃС‚Р°РІРєРё', 'РЅР°СЂРєРѕС‚РёРєРё',
+        'РѕСЂСѓР¶РёРµ', 'РІР·Р»РѕРј', 'hack', 'porn', 'sex', 'nsfw', '18+',
+        'С„РёС€РёРЅРі', 'РѕР±РЅР°Р»', 'РєСЂРёРїС‚Р°', 'РїСЂРѕС„РёС‚', 'Р·Р°СЂР°Р±РѕС‚РѕРє',
+        'РјРѕС€РµРЅ', 'scam', 'leak', 'onlyfans'
     ]
     
     text_lower = text.lower()
     for word in forbidden_words:
         if word in text_lower:
-            return False, f"Обнаружено запрещённое слово: {word}"
+            return False, f"РћР±РЅР°СЂСѓР¶РµРЅРѕ Р·Р°РїСЂРµС‰С‘РЅРЅРѕРµ СЃР»РѕРІРѕ: {word}"
 
-    # Эвристики: слишком много ссылок/капса/повторов
+    # Р­РІСЂРёСЃС‚РёРєРё: СЃР»РёС€РєРѕРј РјРЅРѕРіРѕ СЃСЃС‹Р»РѕРє/РєР°РїСЃР°/РїРѕРІС‚РѕСЂРѕРІ
     links = len(re.findall(r'(https?://|www\.)', text_lower))
     if links >= 3:
-        return False, "Слишком много ссылок"
+        return False, "РЎР»РёС€РєРѕРј РјРЅРѕРіРѕ СЃСЃС‹Р»РѕРє"
 
-    letters = re.findall(r'[a-zа-я]', text_lower)
+    letters = re.findall(r'[a-zР°-СЏ]', text_lower)
     if letters:
         upper = sum(1 for c in text if c.isupper())
         if upper / max(1, len(text)) > 0.6 and len(text) > 20:
-            return False, "Слишком много капса"
+            return False, "РЎР»РёС€РєРѕРј РјРЅРѕРіРѕ РєР°РїСЃР°"
 
     if len(text) > 4000:
-        return False, "Слишком длинный текст"
+        return False, "РЎР»РёС€РєРѕРј РґР»РёРЅРЅС‹Р№ С‚РµРєСЃС‚"
     
     return True, ""
 
-# --- МОДЕЛИ БАЗЫ ДАННЫХ ---
+# --- РњРћР”Р•Р›Р Р‘РђР—Р« Р”РђРќРќР«РҐ ---
 
 group_members = db.Table('group_members',
     db.Column('user_id', db.Integer, db.ForeignKey('users.id'), primary_key=True),
@@ -248,7 +248,7 @@ class User(UserMixin, db.Model):
     username = db.Column(db.String(150), unique=True, nullable=False)
     email = db.Column(db.String(150), unique=True, nullable=False)
     password = db.Column(db.String(200), nullable=False)
-    bio = db.Column(db.String(300), default="Я тут новенький!")
+    bio = db.Column(db.String(300), default="РЇ С‚СѓС‚ РЅРѕРІРµРЅСЊРєРёР№!")
     avatar = db.Column(db.String(300), default=None)
     banner = db.Column(db.String(300), default=None)
     theme = db.Column(db.String(10), default='light')
@@ -256,7 +256,7 @@ class User(UserMixin, db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     last_seen = db.Column(db.DateTime, default=datetime.utcnow)
     
-    # Поля админа
+    # РџРѕР»СЏ Р°РґРјРёРЅР°
     is_admin = db.Column(db.Boolean, default=False)
     is_banned = db.Column(db.Boolean, default=False)
     is_verified = db.Column(db.Boolean, default=False)
@@ -270,7 +270,7 @@ class User(UserMixin, db.Model):
     likes = db.relationship('Like', backref='user', lazy=True)
     groups = db.relationship('Group', secondary=group_members, backref=db.backref('members', lazy='dynamic'))
     
-    # Подписки (вайбики)
+    # РџРѕРґРїРёСЃРєРё (РІР°Р№Р±РёРєРё)
     following = db.relationship(
         'Follow',
         foreign_keys='Follow.follower_id',
@@ -353,8 +353,8 @@ class Poll(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     post_id = db.Column(db.Integer, db.ForeignKey('posts.id'), nullable=False)
     question = db.Column(db.String(300), nullable=False)
-    options = db.Column(db.Text, nullable=False)  # JSON строка с вариантами
-    votes = db.Column(db.Text, default='{}')  # JSON строка с голосами
+    options = db.Column(db.Text, nullable=False)  # JSON СЃС‚СЂРѕРєР° СЃ РІР°СЂРёР°РЅС‚Р°РјРё
+    votes = db.Column(db.Text, default='{}')  # JSON СЃС‚СЂРѕРєР° СЃ РіРѕР»РѕСЃР°РјРё
 
 class PollVote(db.Model):
     __tablename__ = 'poll_votes'
@@ -480,7 +480,7 @@ class AiChat(db.Model):
     __tablename__ = 'ai_chats'
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    title = db.Column(db.String(200), default='Новый чат')
+    title = db.Column(db.String(200), default='РќРѕРІС‹Р№ С‡Р°С‚')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow)
     is_admin_mode = db.Column(db.Boolean, default=False)
@@ -503,7 +503,7 @@ def ensure_user_sessions_schema():
     from sqlalchemy import text
     try:
         with app.app_context():
-            # 1. Таблица user_sessions
+            # 1. РўР°Р±Р»РёС†Р° user_sessions
             db.session.execute(text("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS ip VARCHAR(64)"))
             db.session.execute(text("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS city VARCHAR(100)"))
             db.session.execute(text("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS user_agent VARCHAR(300)"))
@@ -511,19 +511,19 @@ def ensure_user_sessions_schema():
             db.session.execute(text("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS last_seen TIMESTAMP"))
             db.session.execute(text("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE"))
             
-            # 2. Таблица notifications
+            # 2. РўР°Р±Р»РёС†Р° notifications
             db.session.execute(text("ALTER TABLE notifications ADD COLUMN IF NOT EXISTS ntype VARCHAR(50) DEFAULT 'system'"))
             db.session.execute(text("ALTER TABLE notifications ADD COLUMN IF NOT EXISTS link VARCHAR(500)"))
             db.session.execute(text("ALTER TABLE notifications ADD COLUMN IF NOT EXISTS from_user_id INTEGER"))
-            # Фикс: старая колонка "type" (NOT NULL без дефолта) вызывала краш при вставке через ntype
+            # Р¤РёРєСЃ: СЃС‚Р°СЂР°СЏ РєРѕР»РѕРЅРєР° "type" (NOT NULL Р±РµР· РґРµС„РѕР»С‚Р°) РІС‹Р·С‹РІР°Р»Р° РєСЂР°С€ РїСЂРё РІСЃС‚Р°РІРєРµ С‡РµСЂРµР· ntype
             db.session.execute(text("ALTER TABLE notifications ALTER COLUMN type DROP NOT NULL"))
             db.session.execute(text("ALTER TABLE notifications ALTER COLUMN type SET DEFAULT 'system'"))
             
-            # 3. Таблица stories
+            # 3. РўР°Р±Р»РёС†Р° stories
             db.session.execute(text("ALTER TABLE stories ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"))
             db.session.execute(text("ALTER TABLE stories ADD COLUMN IF NOT EXISTS media_type VARCHAR(50) DEFAULT 'image'"))
 
-            # 4. ТАБЛИЦА REPORTS (Исправляем вашу новую ошибку)
+            # 4. РўРђР‘Р›РР¦Рђ REPORTS (РСЃРїСЂР°РІР»СЏРµРј РІР°С€Сѓ РЅРѕРІСѓСЋ РѕС€РёР±РєСѓ)
             db.session.execute(text("ALTER TABLE reports ADD COLUMN IF NOT EXISTS post_id INTEGER"))
             db.session.execute(text("ALTER TABLE reports ADD COLUMN IF NOT EXISTS target_user_id INTEGER"))
             db.session.execute(text("ALTER TABLE reports ADD COLUMN IF NOT EXISTS reason TEXT"))
@@ -547,7 +547,7 @@ def ensure_user_sessions_schema():
                 db.session.execute(text("INSERT INTO site_stats (total_visitors, peak_online) VALUES (0, 0)"))
 
 
-            # 5. Сообщения
+            # 5. РЎРѕРѕР±С‰РµРЅРёСЏ
             db.session.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS read_at TIMESTAMP"))
             db.session.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS deleted_for_all BOOLEAN DEFAULT FALSE"))
             db.session.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS client_token VARCHAR(80)"))
@@ -555,7 +555,7 @@ def ensure_user_sessions_schema():
             db.session.execute(text("ALTER TABLE posts ADD COLUMN IF NOT EXISTS client_token VARCHAR(80)"))
 
             db.session.commit()
-            print(">>> БАЗА ДАННЫХ ПОЛНОСТЬЮ ОБНОВЛЕНА: Жалобы, уведомления и сессии в порядке! <<<")
+            print(">>> Р‘РђР—Рђ Р”РђРќРќР«РҐ РџРћР›РќРћРЎРўР¬Р® РћР‘РќРћР’Р›Р•РќРђ: Р–Р°Р»РѕР±С‹, СѓРІРµРґРѕРјР»РµРЅРёСЏ Рё СЃРµСЃСЃРёРё РІ РїРѕСЂСЏРґРєРµ! <<<")
     except Exception as e:
         print(f"Schema check failed: {e}")
         db.session.rollback()
@@ -604,12 +604,12 @@ def track_visitor():
             db.session.commit()
             session['user_visit_counted'] = True
 
-# Проверка на бан
+# РџСЂРѕРІРµСЂРєР° РЅР° Р±Р°РЅ
 @app.before_request
 def check_ban():
     if current_user.is_authenticated and current_user.is_banned:
         logout_user()
-        flash("Ваш аккаунт заблокирован администрацией.", "danger")
+        flash("Р’Р°С€ Р°РєРєР°СѓРЅС‚ Р·Р°Р±Р»РѕРєРёСЂРѕРІР°РЅ Р°РґРјРёРЅРёСЃС‚СЂР°С†РёРµР№.", "danger")
         return redirect(url_for('login'))
 
 @app.before_request
@@ -633,31 +633,31 @@ def update_last_seen():
         session['last_seen_sync'] = now.isoformat()
         db.session.commit()
 
-# --- ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ ВРЕМЕНИ ---
+# --- Р’РЎРџРћРњРћР“РђРўР•Р›Р¬РќРђРЇ Р¤РЈРќРљР¦РРЇ Р”Р›РЇ Р’Р Р•РњР•РќР ---
 def time_ago(dt):
-    """Красивое отображение времени"""
+    """РљСЂР°СЃРёРІРѕРµ РѕС‚РѕР±СЂР°Р¶РµРЅРёРµ РІСЂРµРјРµРЅРё"""
     now = datetime.utcnow()
     diff = now - dt
     
     seconds = diff.total_seconds()
     
     if seconds < 60:
-        return "только что"
+        return "С‚РѕР»СЊРєРѕ С‡С‚Рѕ"
     elif seconds < 3600:
         minutes = int(seconds / 60)
-        return f"{minutes} мин назад"
+        return f"{minutes} РјРёРЅ РЅР°Р·Р°Рґ"
     elif seconds < 86400:
         hours = int(seconds / 3600)
-        return f"{hours} ч назад"
+        return f"{hours} С‡ РЅР°Р·Р°Рґ"
     elif seconds < 604800:
         days = int(seconds / 86400)
-        return f"{days} д назад"
+        return f"{days} Рґ РЅР°Р·Р°Рґ"
     else:
-        return dt.strftime('%d.%m.%Y в %H:%M')
+        return dt.strftime('%d.%m.%Y РІ %H:%M')
 
 app.jinja_env.filters['time_ago'] = time_ago
 
-# --- КАПЧА ---
+# --- РљРђРџР§Рђ ---
 def generate_captcha():
     a = random.randint(1, 9)
     b = random.randint(1, 9)
@@ -671,7 +671,7 @@ def generate_captcha():
 def validate_captcha(user_answer):
     return user_answer and session.get('captcha_a') == str(user_answer).strip()
 
-# --- УПОМИНАНИЯ И ХЭШТЕГИ ---
+# --- РЈРџРћРњРРќРђРќРРЇ Р РҐР­РЁРўР•Р“Р ---
 def linkify_text(text):
     if not text:
         return text
@@ -733,7 +733,7 @@ def media_asset(asset_name):
 
     return send_from_directory(str(file_path.parent), file_path.name, conditional=True)
 
-# --- ШАБЛОНЫ ---
+# --- РЁРђР‘Р›РћРќР« ---
 templates = {
     'base.html': """
 <!DOCTYPE html>
@@ -1031,7 +1031,7 @@ templates = {
             <a class="navbar-brand fw-bold" href="{{ url_for('index') }}"><i class="bi bi-droplet-fill"></i> Fontan</a>
             {% if current_user.is_authenticated %}
             <form class="d-none d-md-flex ms-3" action="{{ url_for('search') }}" method="GET" style="max-width:380px; width:100%;">
-                <input name="q" class="form-control form-control-sm rounded-pill" placeholder="Поиск: люди, посты, хэштеги, группы">
+                <input name="q" class="form-control form-control-sm rounded-pill" placeholder="РџРѕРёСЃРє: Р»СЋРґРё, РїРѕСЃС‚С‹, С…СЌС€С‚РµРіРё, РіСЂСѓРїРїС‹">
             </form>
             {% endif %}
             <div class="d-flex gap-3 align-items-center">
@@ -1130,17 +1130,17 @@ templates = {
                         btn.disabled = true;
                         if (btn.tagName === 'BUTTON') {
                             btn.dataset.originalHtml = btn.dataset.originalHtml || btn.innerHTML;
-                            btn.innerHTML = '<span class=\"spinner-border spinner-border-sm me-1\"></span>Отправка';
+                            btn.innerHTML = '<span class=\"spinner-border spinner-border-sm me-1\"></span>РћС‚РїСЂР°РІРєР°';
                         } else {
                             btn.dataset.originalValue = btn.dataset.originalValue || btn.value;
-                            btn.value = 'Отправка...';
+                            btn.value = 'РћС‚РїСЂР°РІРєР°...';
                         }
                     });
                 });
             });
         }
         
-        // Инициализация иконки при загрузке
+        // РРЅРёС†РёР°Р»РёР·Р°С†РёСЏ РёРєРѕРЅРєРё РїСЂРё Р·Р°РіСЂСѓР·РєРµ
         document.addEventListener('DOMContentLoaded', function() {
             const theme = document.documentElement.getAttribute('data-theme');
             updateThemeIcon(theme);
@@ -1169,7 +1169,7 @@ templates = {
         function likePop(e, postId) {
             const pop = document.createElement('div');
             pop.className = 'like-pop';
-            pop.innerHTML = '❤';
+            pop.innerHTML = 'вќ¤';
             pop.style.left = (e.clientX - 24) + 'px';
             pop.style.top = (e.clientY - 24) + 'px';
             document.body.appendChild(pop);
@@ -1182,12 +1182,12 @@ templates = {
             if (navigator.share) {
                 navigator.share({ url: full });
             } else {
-                navigator.clipboard.writeText(full).then(() => alert('Ссылка скопирована'));
+                navigator.clipboard.writeText(full).then(() => alert('РЎСЃС‹Р»РєР° СЃРєРѕРїРёСЂРѕРІР°РЅР°'));
             }
         }
 
         function editPost(postId) {
-            const text = prompt('Новый текст поста');
+            const text = prompt('РќРѕРІС‹Р№ С‚РµРєСЃС‚ РїРѕСЃС‚Р°');
             if (text === null) return;
             const formData = new FormData();
             formData.append('content', text);
@@ -1208,11 +1208,11 @@ templates = {
                 } catch (error) {
                     console.error(error);
                 }
-                const shouldOpen = window.confirm(`Звонит ${data.from_username}. Открыть чат?`);
+                const shouldOpen = window.confirm(`Р—РІРѕРЅРёС‚ ${data.from_username}. РћС‚РєСЂС‹С‚СЊ С‡Р°С‚?`);
                 if (shouldOpen) {
                     window.location.href = `/messenger?type=private&chat_id=${data.from_id}`;
                 } else {
-                    window.fontanBaseSocket.emit('call_decline', { to_user_id: data.from_id, reason: 'Отклонено' });
+                    window.fontanBaseSocket.emit('call_decline', { to_user_id: data.from_id, reason: 'РћС‚РєР»РѕРЅРµРЅРѕ' });
                 }
             });
         }
@@ -1245,18 +1245,18 @@ templates = {
                 {% if current_user.is_admin %}<span class="badge bg-danger">ADMIN</span>{% endif %}
                 <div class="mt-2">
                     <span class="badge-vibers">
-                        <i class="bi bi-heart-fill"></i> {{ current_user.followers.count() }} вайберов
+                        <i class="bi bi-heart-fill"></i> {{ current_user.followers.count() }} РІР°Р№Р±РµСЂРѕРІ
                     </span>
                 </div>
             </div>
             <hr>
-            <a href="{{ url_for('users_list') }}" class="btn btn-outline-primary w-100 mb-2 rounded-pill">Найти людей</a>
-            <a href="{{ url_for('friends_requests') }}" class="btn btn-outline-success w-100 mb-2 rounded-pill">Запросы в друзья</a>
+            <a href="{{ url_for('users_list') }}" class="btn btn-outline-primary w-100 mb-2 rounded-pill">РќР°Р№С‚Рё Р»СЋРґРµР№</a>
+            <a href="{{ url_for('friends_requests') }}" class="btn btn-outline-success w-100 mb-2 rounded-pill">Р—Р°РїСЂРѕСЃС‹ РІ РґСЂСѓР·СЊСЏ</a>
             <a href="{{ url_for('my_vibers') }}" class="btn btn-outline-info w-100 mb-2 rounded-pill">
-                <i class="bi bi-heart-fill"></i> Мои вайберы
+                <i class="bi bi-heart-fill"></i> РњРѕРё РІР°Р№Р±РµСЂС‹
             </a>
             {% if current_user.is_admin %}
-            <a href="{{ url_for('admin_dashboard') }}" class="btn btn-outline-danger w-100 mb-2 rounded-pill">Админ</a>
+            <a href="{{ url_for('admin_dashboard') }}" class="btn btn-outline-danger w-100 mb-2 rounded-pill">РђРґРјРёРЅ</a>
             {% endif %}
         </div>
     </div>
@@ -1273,7 +1273,7 @@ templates = {
                         {% endif %}
                     </div>
                     <label class="btn btn-sm btn-outline-primary rounded-pill">
-                        История
+                        РСЃС‚РѕСЂРёСЏ
                         <input type="file" name="story_media" hidden accept="image/*,video/*">
                     </label>
                 </form>
@@ -1291,35 +1291,35 @@ templates = {
         <div class="card p-3">
             <form method="POST" action="{{ url_for('create_post') }}" enctype="multipart/form-data" id="create-post-form" class="js-idempotent-form">
                 <input type="hidden" name="client_token">
-                <textarea name="content" class="form-control border-0 bg-light rounded-3 p-3" placeholder="Что нового?" rows="3"></textarea>
+                <textarea name="content" class="form-control border-0 bg-light rounded-3 p-3" placeholder="Р§С‚Рѕ РЅРѕРІРѕРіРѕ?" rows="3"></textarea>
                 
                 <div id="poll-section" style="display: none;" class="mt-3 p-3 bg-light rounded-3">
-                    <input type="text" name="poll_question" class="form-control mb-2" placeholder="Вопрос опроса" id="poll-question">
+                    <input type="text" name="poll_question" class="form-control mb-2" placeholder="Р’РѕРїСЂРѕСЃ РѕРїСЂРѕСЃР°" id="poll-question">
                     <div id="poll-options">
-                        <input type="text" name="poll_option_1" class="form-control mb-2" placeholder="Вариант 1">
-                        <input type="text" name="poll_option_2" class="form-control mb-2" placeholder="Вариант 2">
+                        <input type="text" name="poll_option_1" class="form-control mb-2" placeholder="Р’Р°СЂРёР°РЅС‚ 1">
+                        <input type="text" name="poll_option_2" class="form-control mb-2" placeholder="Р’Р°СЂРёР°РЅС‚ 2">
                     </div>
-                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="addPollOption()">+ Добавить вариант</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="addPollOption()">+ Р”РѕР±Р°РІРёС‚СЊ РІР°СЂРёР°РЅС‚</button>
                 </div>
                 
                 <div class="mt-3 d-flex justify-content-between align-items-center">
                     <div class="d-flex gap-2">
                         <label class="btn btn-light text-primary rounded-pill">
-                            <i class="bi bi-camera-fill"></i> Медиа
+                            <i class="bi bi-camera-fill"></i> РњРµРґРёР°
                             <input type="file" name="media" hidden accept="image/*,video/*" multiple>
                         </label>
                         <button type="button" class="btn btn-light text-success rounded-pill" onclick="togglePoll()">
-                            <i class="bi bi-bar-chart-fill"></i> Опрос
+                            <i class="bi bi-bar-chart-fill"></i> РћРїСЂРѕСЃ
                         </button>
                     </div>
-                    <button type="submit" class="btn btn-primary rounded-pill px-4">Пост</button>
+                    <button type="submit" class="btn btn-primary rounded-pill px-4">РџРѕСЃС‚</button>
                 </div>
                 <div class="mt-2 d-flex gap-3 align-items-center">
                     <div class="form-check">
                         <input class="form-check-input" type="checkbox" name="disable_comments" id="disable_comments">
-                        <label class="form-check-label" for="disable_comments">Отключить комментарии</label>
+                        <label class="form-check-label" for="disable_comments">РћС‚РєР»СЋС‡РёС‚СЊ РєРѕРјРјРµРЅС‚Р°СЂРёРё</label>
                     </div>
-                    <input type="text" name="co_author" class="form-control form-control-sm" placeholder="Со‑автор (@username)">
+                    <input type="text" name="co_author" class="form-control form-control-sm" placeholder="РЎРѕвЂ‘Р°РІС‚РѕСЂ (@username)">
                 </div>
             </form>
         </div>
@@ -1332,12 +1332,12 @@ templates = {
         
         <div class="loading-spinner" id="loading-spinner">
             <div class="spinner-border" role="status">
-                <span class="visually-hidden">Загрузка...</span>
+                <span class="visually-hidden">Р—Р°РіСЂСѓР·РєР°...</span>
             </div>
         </div>
         
         {% if not posts %}
-        <div class="text-center py-5 text-muted"><p>Лента пуста. Подпишитесь на кого-нибудь!</p></div>
+        <div class="text-center py-5 text-muted"><p>Р›РµРЅС‚Р° РїСѓСЃС‚Р°. РџРѕРґРїРёС€РёС‚РµСЃСЊ РЅР° РєРѕРіРѕ-РЅРёР±СѓРґСЊ!</p></div>
         {% endif %}
     </div>
 </div>
@@ -1361,12 +1361,12 @@ function addPollOption() {
         input.type = 'text';
         input.name = `poll_option_${pollOptionCount}`;
         input.className = 'form-control mb-2';
-        input.placeholder = `Вариант ${pollOptionCount}`;
+        input.placeholder = `Р’Р°СЂРёР°РЅС‚ ${pollOptionCount}`;
         optionsDiv.appendChild(input);
     }
 }
 
-// Ленивая подгрузка постов
+// Р›РµРЅРёРІР°СЏ РїРѕРґРіСЂСѓР·РєР° РїРѕСЃС‚РѕРІ
 window.addEventListener('scroll', function() {
     if (isLoading || !hasMore) return;
     
@@ -1434,7 +1434,7 @@ document.querySelectorAll('.btn-record-comment').forEach(btn => {
                     fetch(`/add_voice_comment/${postId}`, { method: 'POST', body: formData }).then(r => location.reload());
                     audioChunks = [];
                 });
-            } catch (err) { alert("Нет доступа к микрофону!"); }
+            } catch (err) { alert("РќРµС‚ РґРѕСЃС‚СѓРїР° Рє РјРёРєСЂРѕС„РѕРЅСѓ!"); }
         } else {
             mediaRecorder.stop();
             btn.classList.add('btn-danger');
@@ -1451,7 +1451,7 @@ function votePoll(pollId, optionIndex) {
             if (data.success) {
                 location.reload();
             } else {
-                alert(data.error || 'Ошибка голосования');
+                alert(data.error || 'РћС€РёР±РєР° РіРѕР»РѕСЃРѕРІР°РЅРёСЏ');
             }
         });
 }
@@ -1476,16 +1476,16 @@ function votePoll(pollId, optionIndex) {
             </a>
             <div>
                 <a href="{{ url_for('profile', username=(post_author.username if post_author else current_user.username)) }}" class="fw-bold text-decoration-none" style="color: var(--text-color);">
-                    {{ post_author.username if post_author else 'Удалённый пользователь' }}
+                    {{ post_author.username if post_author else 'РЈРґР°Р»С‘РЅРЅС‹Р№ РїРѕР»СЊР·РѕРІР°С‚РµР»СЊ' }}
                     {% if post_author and post_author.is_verified %}<i class="bi bi-patch-check-fill verified-icon"></i>{% endif %}
                 </a>
                 {% if post.co_author_id and post_co_author %}
-                    <span class="text-muted small">· cо‑автор</span>
+                    <span class="text-muted small">В· cРѕвЂ‘Р°РІС‚РѕСЂ</span>
                     <a href="{{ url_for('profile', username=post_co_author.username) }}" class="text-decoration-none text-muted small">
                         {{ post_co_author.username }}
                     </a>
                 {% endif %}
-                <div class="text-muted small" style="font-size: 0.75rem;">{{ post.timestamp|time_ago }}{% if post.edited_at %} · изменено{% endif %}</div>
+                <div class="text-muted small" style="font-size: 0.75rem;">{{ post.timestamp|time_ago }}{% if post.edited_at %} В· РёР·РјРµРЅРµРЅРѕ{% endif %}</div>
             </div>
         </div>
         {% if (post_author and post_author.id == current_user.id) or current_user.is_admin %}
@@ -1498,7 +1498,7 @@ function votePoll(pollId, optionIndex) {
     
     {% if not post.is_moderated %}
     <div class="alert alert-warning mt-2 mb-2">
-        <i class="bi bi-exclamation-triangle-fill"></i> Пост заблокирован модерацией: {{ post.moderation_reason }}
+        <i class="bi bi-exclamation-triangle-fill"></i> РџРѕСЃС‚ Р·Р°Р±Р»РѕРєРёСЂРѕРІР°РЅ РјРѕРґРµСЂР°С†РёРµР№: {{ post.moderation_reason }}
     </div>
     {% endif %}
     
@@ -1556,7 +1556,7 @@ function votePoll(pollId, optionIndex) {
             </div>
             {% endfor %}
             
-            <small class="text-muted">Всего голосов: {{ total_votes }}</small>
+            <small class="text-muted">Р’СЃРµРіРѕ РіРѕР»РѕСЃРѕРІ: {{ total_votes }}</small>
         </div>
         {% endif %}
     </div>
@@ -1573,7 +1573,7 @@ function votePoll(pollId, optionIndex) {
                 <i class="bi bi-chat fs-5"></i> <span>{{ post.comments_rel|length }}</span>
             </div>
             <button class="btn p-0 text-secondary d-flex align-items-center gap-1" onclick="sharePost('{{ url_for('post_view', post_id=post.id) }}')">
-                <i class="bi bi-share fs-5"></i> <span>Поделиться</span>
+                <i class="bi bi-share fs-5"></i> <span>РџРѕРґРµР»РёС‚СЊСЃСЏ</span>
             </button>
         </div>
         <div class="text-muted small d-flex gap-3 align-items-center">
@@ -1587,12 +1587,12 @@ function votePoll(pollId, optionIndex) {
         <div class="mb-2 border-bottom pb-1">
             <div class="d-flex justify-content-between">
                  <small>
-                     <b>{{ comment.author.username if comment.author else 'Удалённый пользователь' }}</b>
+                     <b>{{ comment.author.username if comment.author else 'РЈРґР°Р»С‘РЅРЅС‹Р№ РїРѕР»СЊР·РѕРІР°С‚РµР»СЊ' }}</b>
                      {% if comment.author and comment.author.is_verified %}<i class="bi bi-patch-check-fill verified-icon" style="font-size: 10px;"></i>{% endif %}
                      :
                  </small>
                  {% if comment.user_id == current_user.id or post.user_id == current_user.id or current_user.is_admin %}
-                    <a href="{{ url_for('delete_comment', comment_id=comment.id) }}" class="text-danger small" style="text-decoration:none;">×</a>
+                    <a href="{{ url_for('delete_comment', comment_id=comment.id) }}" class="text-danger small" style="text-decoration:none;">Г—</a>
                  {% endif %}
             </div>
             {% if comment.text %}<div class="small">{{ comment.text }}</div>{% endif %}
@@ -1607,13 +1607,13 @@ function votePoll(pollId, optionIndex) {
         <div class="mt-2">
               <form action="{{ url_for('add_comment', post_id=post.id) }}" method="POST" class="d-flex gap-1 align-items-center js-idempotent-form">
                 <input type="hidden" name="client_token">
-                <input type="text" name="text" class="form-control form-control-sm rounded-pill" placeholder="Комментарий...">
+                <input type="text" name="text" class="form-control form-control-sm rounded-pill" placeholder="РљРѕРјРјРµРЅС‚Р°СЂРёР№...">
                 <button type="button" class="btn btn-sm btn-danger btn-record-comment rounded-circle" data-post-id="{{ post.id }}"><i class="bi bi-mic-fill"></i></button>
                 <button type="submit" class="btn btn-sm btn-primary rounded-circle"><i class="bi bi-send-fill"></i></button>
               </form>
         </div>
         {% else %}
-            <div class="text-muted small">Комментарии отключены</div>
+            <div class="text-muted small">РљРѕРјРјРµРЅС‚Р°СЂРёРё РѕС‚РєР»СЋС‡РµРЅС‹</div>
         {% endif %}
     </div>
 </div>
@@ -1625,7 +1625,7 @@ function votePoll(pollId, optionIndex) {
 <div class="row justify-content-center">
     <div class="col-md-8">
         <h3 class="mb-4">
-            <i class="bi bi-heart-fill text-danger"></i> Мои вайберы
+            <i class="bi bi-heart-fill text-danger"></i> РњРѕРё РІР°Р№Р±РµСЂС‹
             <span class="badge-vibers ms-2">{{ followers|length }}</span>
         </h3>
         
@@ -1649,13 +1649,13 @@ function votePoll(pollId, optionIndex) {
                     </div>
                 </div>
                 <div>
-                    <a href="{{ url_for('profile', username=follower.username) }}" class="btn btn-primary btn-sm rounded-pill">Профиль</a>
+                    <a href="{{ url_for('profile', username=follower.username) }}" class="btn btn-primary btn-sm rounded-pill">РџСЂРѕС„РёР»СЊ</a>
                 </div>
             </div>
             {% endfor %}
         {% else %}
             <div class="alert alert-light text-center">
-                <i class="bi bi-emoji-frown"></i> У вас пока нет вайберов
+                <i class="bi bi-emoji-frown"></i> РЈ РІР°СЃ РїРѕРєР° РЅРµС‚ РІР°Р№Р±РµСЂРѕРІ
             </div>
         {% endif %}
     </div>
@@ -1668,7 +1668,7 @@ function votePoll(pollId, optionIndex) {
 {% block content %}
 <div class="row justify-content-center">
     <div class="col-md-8">
-        <h3 class="mb-4">Входящие запросы</h3>
+        <h3 class="mb-4">Р’С…РѕРґСЏС‰РёРµ Р·Р°РїСЂРѕСЃС‹</h3>
         {% if requests %}
             {% for req in requests %}
             <div class="card p-3 mb-2 d-flex flex-row justify-content-between align-items-center">
@@ -1683,13 +1683,13 @@ function votePoll(pollId, optionIndex) {
                     <h5>{{ req.user.username }}</h5>
                 </div>
                 <div>
-                    <a href="{{ url_for('accept_friend', user_id=req.user.id) }}" class="btn btn-success btn-sm rounded-pill">Принять</a>
-                    <a href="{{ url_for('remove_friend', user_id=req.user.id) }}" class="btn btn-outline-danger btn-sm rounded-pill">Отклонить</a>
+                    <a href="{{ url_for('accept_friend', user_id=req.user.id) }}" class="btn btn-success btn-sm rounded-pill">РџСЂРёРЅСЏС‚СЊ</a>
+                    <a href="{{ url_for('remove_friend', user_id=req.user.id) }}" class="btn btn-outline-danger btn-sm rounded-pill">РћС‚РєР»РѕРЅРёС‚СЊ</a>
                 </div>
             </div>
             {% endfor %}
         {% else %}
-            <div class="alert alert-light text-center">Нет новых запросов</div>
+            <div class="alert alert-light text-center">РќРµС‚ РЅРѕРІС‹С… Р·Р°РїСЂРѕСЃРѕРІ</div>
         {% endif %}
     </div>
 </div>
@@ -1703,11 +1703,11 @@ function votePoll(pollId, optionIndex) {
     <div class="row g-0 h-100">
         <div class="col-md-4 border-end h-100 d-flex flex-column" style="background-color: var(--hover-bg);">
             <div class="p-3 border-bottom d-flex justify-content-between align-items-center">
-                <h5 class="mb-0 fw-bold">Чаты</h5>
-                <button class="btn btn-sm btn-outline-primary rounded-pill" data-bs-toggle="modal" data-bs-target="#createGroupModal">+ Группа</button>
+                <h5 class="mb-0 fw-bold">Р§Р°С‚С‹</h5>
+                <button class="btn btn-sm btn-outline-primary rounded-pill" data-bs-toggle="modal" data-bs-target="#createGroupModal">+ Р“СЂСѓРїРїР°</button>
             </div>
             <div class="overflow-auto flex-grow-1">
-                <div class="p-2 text-uppercase text-muted small fw-bold">Личные</div>
+                <div class="p-2 text-uppercase text-muted small fw-bold">Р›РёС‡РЅС‹Рµ</div>
                 {% for friend in friends %}
                 <a href="{{ url_for('messenger', type='private', chat_id=friend.id) }}" class="d-flex align-items-center p-3 text-decoration-none border-bottom hover-shadow" style="color: var(--text-color); background-color: var(--card-bg);">
                     <div class="avatar me-3 position-relative">
@@ -1723,7 +1723,7 @@ function votePoll(pollId, optionIndex) {
                     </div>
                 </a>
                 {% endfor %}
-                <div class="p-2 text-uppercase text-muted small fw-bold mt-2">Группы</div>
+                <div class="p-2 text-uppercase text-muted small fw-bold mt-2">Р“СЂСѓРїРїС‹</div>
                 {% for group in groups %}
                 <a href="{{ url_for('messenger', type='group', chat_id=group.id) }}" class="d-flex align-items-center p-3 text-decoration-none border-bottom hover-shadow" style="color: var(--text-color); background-color: var(--card-bg);">
                     <div class="avatar me-3 bg-info text-white">
@@ -1754,23 +1754,23 @@ function votePoll(pollId, optionIndex) {
                             {% if chat_type == 'private' %}
                                 {{ active_chat.username }}
                             {% else %}
-                                {{ active_chat.name }} (Группа)
+                                {{ active_chat.name }} (Р“СЂСѓРїРїР°)
                             {% endif %}
                         </div>
                     </div>
                 </div>
                 <div class="flex-grow-1 p-4 overflow-auto d-flex flex-column" id="chat-box"></div>
-                <div id="typing-indicator" class="text-muted small px-4" style="display:none;">Печатает...</div>
+                <div id="typing-indicator" class="text-muted small px-4" style="display:none;">РџРµС‡Р°С‚Р°РµС‚...</div>
                 <div class="p-3 border-top" style="background-color: var(--hover-bg);">
                     <div class="d-flex gap-2 align-items-center">
                         <input type="hidden" id="chat_type" value="{{ chat_type }}">
                         <input type="hidden" id="chat_id" value="{{ active_chat.id }}">
                         {% if chat_type == 'private' %}
-                        <button id="btn-start-call" class="btn btn-outline-success rounded-circle" title="Позвонить"><i class="bi bi-telephone-fill"></i></button>
-                        <button id="btn-start-video" class="btn btn-outline-primary rounded-circle" title="Видео"><i class="bi bi-camera-video-fill"></i></button>
+                        <button id="btn-start-call" class="btn btn-outline-success rounded-circle" title="РџРѕР·РІРѕРЅРёС‚СЊ"><i class="bi bi-telephone-fill"></i></button>
+                        <button id="btn-start-video" class="btn btn-outline-primary rounded-circle" title="Р’РёРґРµРѕ"><i class="bi bi-camera-video-fill"></i></button>
                         {% endif %}
-                        <button id="emoji-btn" class="btn btn-outline-secondary rounded-circle">😊</button>
-                        <input type="text" id="msg-input" class="form-control rounded-pill border-0 shadow-sm" placeholder="Написать..." autocomplete="off">
+                        <button id="emoji-btn" class="btn btn-outline-secondary rounded-circle">рџЉ</button>
+                        <input type="text" id="msg-input" class="form-control rounded-pill border-0 shadow-sm" placeholder="РќР°РїРёСЃР°С‚СЊ..." autocomplete="off">
                         <button id="btn-record-msg" class="btn btn-danger rounded-circle shadow-sm"><i class="bi bi-mic-fill"></i></button>
                         <button id="btn-send-msg" class="btn btn-primary rounded-circle shadow-sm"><i class="bi bi-send-fill"></i></button>
                     </div>
@@ -1783,16 +1783,16 @@ function votePoll(pollId, optionIndex) {
                                 <div id="call-avatar" style="width:100%; height:100%; border-radius:50%; overflow:hidden; display:flex; align-items:center; justify-content:center; font-size:2rem; font-weight:700; background:rgba(255,255,255,.16);"></div>
                             </div>
                             <div id="call-username" class="fs-4 fw-bold">Call</div>
-                            <div id="call-status" style="opacity:.88; min-height:24px;">Готовимся к звонку...</div>
+                            <div id="call-status" style="opacity:.88; min-height:24px;">Р“РѕС‚РѕРІРёРјСЃСЏ Рє Р·РІРѕРЅРєСѓ...</div>
                             <div id="call-timer" style="font-size:1.5rem; font-weight:700; letter-spacing:.08em; margin:8px 0 18px;">00:00</div>
                             <div class="d-flex justify-content-center gap-2 flex-wrap">
-                                <button class="btn btn-light rounded-circle" id="call-mic-btn" title="Микрофон"><i class="bi bi-mic-fill"></i></button>
-                                <button class="btn btn-light rounded-circle" id="call-speaker-btn" title="Звук"><i class="bi bi-volume-up-fill"></i></button>
-                                <button class="btn btn-light rounded-circle" id="call-camera-btn" title="Вебка"><i class="bi bi-camera-video-fill"></i></button>
-                                <button class="btn btn-light rounded-circle" id="call-screen-btn" title="Экран"><i class="bi bi-display-fill"></i></button>
-                                <button class="btn btn-success rounded-circle" id="call-accept-btn" title="Ответить" style="display:none;"><i class="bi bi-telephone-inbound-fill"></i></button>
-                                <button class="btn btn-danger rounded-circle" id="call-decline-btn" title="Отклонить" style="display:none;"><i class="bi bi-telephone-x-fill"></i></button>
-                                <button class="btn btn-danger rounded-circle" id="call-end-btn" title="Завершить"><i class="bi bi-telephone-x-fill"></i></button>
+                                <button class="btn btn-light rounded-circle" id="call-mic-btn" title="РњРёРєСЂРѕС„РѕРЅ"><i class="bi bi-mic-fill"></i></button>
+                                <button class="btn btn-light rounded-circle" id="call-speaker-btn" title="Р—РІСѓРє"><i class="bi bi-volume-up-fill"></i></button>
+                                <button class="btn btn-light rounded-circle" id="call-camera-btn" title="Р’РµР±РєР°"><i class="bi bi-camera-video-fill"></i></button>
+                                <button class="btn btn-light rounded-circle" id="call-screen-btn" title="Р­РєСЂР°РЅ"><i class="bi bi-display-fill"></i></button>
+                                <button class="btn btn-success rounded-circle" id="call-accept-btn" title="РћС‚РІРµС‚РёС‚СЊ" style="display:none;"><i class="bi bi-telephone-inbound-fill"></i></button>
+                                <button class="btn btn-danger rounded-circle" id="call-decline-btn" title="РћС‚РєР»РѕРЅРёС‚СЊ" style="display:none;"><i class="bi bi-telephone-x-fill"></i></button>
+                                <button class="btn btn-danger rounded-circle" id="call-end-btn" title="Р—Р°РІРµСЂС€РёС‚СЊ"><i class="bi bi-telephone-x-fill"></i></button>
                             </div>
                         </div>
                         <video id="local-preview" autoplay muted playsinline style="display:none; position:absolute; right:18px; bottom:18px; width:148px; height:112px; object-fit:cover; border-radius:18px; border:2px solid rgba(255,255,255,.2); background:#050816;"></video>
@@ -1802,7 +1802,7 @@ function votePoll(pollId, optionIndex) {
                 <audio id="ringtone-incoming" preload="auto" loop src="{{ url_for('media_asset', asset_name='rigton2') }}"></audio>
             {% else %}
                 <div class="d-flex align-items-center justify-content-center h-100 text-muted">
-                    <h4>Выберите чат</h4>
+                    <h4>Р’С‹Р±РµСЂРёС‚Рµ С‡Р°С‚</h4>
                 </div>
             {% endif %}
         </div>
@@ -1813,24 +1813,24 @@ function votePoll(pollId, optionIndex) {
     <div class="modal-dialog">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title">Создать группу</h5>
+                <h5 class="modal-title">РЎРѕР·РґР°С‚СЊ РіСЂСѓРїРїСѓ</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <form action="{{ url_for('create_group') }}" method="POST">
                 <div class="modal-body">
                     <div class="mb-3">
-                        <label>Название группы</label>
+                        <label>РќР°Р·РІР°РЅРёРµ РіСЂСѓРїРїС‹</label>
                         <input type="text" name="name" class="form-control" required>
                     </div>
                     <div class="mb-3">
-                        <label>Описание</label>
+                        <label>РћРїРёСЃР°РЅРёРµ</label>
                         <input type="text" name="description" class="form-control">
                     </div>
                     <div class="form-check mb-3">
                         <input class="form-check-input" type="checkbox" name="is_private" id="is_private">
-                        <label class="form-check-label" for="is_private">Приватная группа</label>
+                        <label class="form-check-label" for="is_private">РџСЂРёРІР°С‚РЅР°СЏ РіСЂСѓРїРїР°</label>
                     </div>
-                    <label>Выберите участников</label>
+                    <label>Р’С‹Р±РµСЂРёС‚Рµ СѓС‡Р°СЃС‚РЅРёРєРѕРІ</label>
                     <div class="border rounded p-2" style="max-height: 200px; overflow-y: auto;">
                         {% for friend in friends %}
                         <div class="form-check">
@@ -1843,7 +1843,7 @@ function votePoll(pollId, optionIndex) {
                     </div>
                 </div>
                 <div class="modal-footer">
-                    <button type="submit" class="btn btn-primary">Создать</button>
+                    <button type="submit" class="btn btn-primary">РЎРѕР·РґР°С‚СЊ</button>
                 </div>
             </form>
         </div>
@@ -1982,7 +1982,7 @@ function votePoll(pollId, optionIndex) {
         clearConnectTimeout();
         callConnectTimeout = setTimeout(() => {
             if (!activeCall) return;
-            alert('Не удалось подключить звонок. Попробуйте позвонить ещё раз.');
+            alert('РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕРґРєР»СЋС‡РёС‚СЊ Р·РІРѕРЅРѕРє. РџРѕРїСЂРѕР±СѓР№С‚Рµ РїРѕР·РІРѕРЅРёС‚СЊ РµС‰С‘ СЂР°Р·.');
             finishCall(false);
         }, CALL_CONNECT_TIMEOUT_MS);
     }
@@ -2029,7 +2029,7 @@ function votePoll(pollId, optionIndex) {
             const response = await fetch(`/api/send_message`, { method: 'POST', body: formData });
             const data = await response.json();
             if (!response.ok) {
-                alert(data.error || 'Не удалось отправить сообщение');
+                alert(data.error || 'РќРµ СѓРґР°Р»РѕСЃСЊ РѕС‚РїСЂР°РІРёС‚СЊ СЃРѕРѕР±С‰РµРЅРёРµ');
                 return;
             }
             msgInput.value = '';
@@ -2051,7 +2051,7 @@ function votePoll(pollId, optionIndex) {
     });
 
     emojiBtn.addEventListener('click', () => {
-        const emoji = prompt('Эмодзи (например 😄🔥❤️)');
+        const emoji = prompt('Р­РјРѕРґР·Рё (РЅР°РїСЂРёРјРµСЂ рџ„рџ”Ґвќ¤пёЏ)');
         if (emoji) msgInput.value += emoji;
         msgInput.focus();
     });
@@ -2075,7 +2075,7 @@ function votePoll(pollId, optionIndex) {
                     sendMessage(null, audioBlob);
                     audioChunks = [];
                 });
-            } catch (err) { alert("Нужен микрофон!"); }
+            } catch (err) { alert("РќСѓР¶РµРЅ РјРёРєСЂРѕС„РѕРЅ!"); }
         } else {
             mediaRecorder.stop();
             recordBtn.classList.add('btn-danger');
@@ -2106,19 +2106,19 @@ function votePoll(pollId, optionIndex) {
                     let actionsHtml = '';
                     if (isMe && !msg.deleted_for_all) {
                         actionsHtml = `<div class="text-muted small mt-1">
-                            <a href="#" onclick="editMessage(${msg.id});return false;">Редактировать</a> ·
-                            <a href="#" onclick="deleteMessage(${msg.id}, 'all');return false;">Удалить у всех</a> ·
-                            <a href="#" onclick="deleteMessage(${msg.id}, 'me');return false;">Удалить у меня</a>
+                            <a href="#" onclick="editMessage(${msg.id});return false;">Р РµРґР°РєС‚РёСЂРѕРІР°С‚СЊ</a> В·
+                            <a href="#" onclick="deleteMessage(${msg.id}, 'all');return false;">РЈРґР°Р»РёС‚СЊ Сѓ РІСЃРµС…</a> В·
+                            <a href="#" onclick="deleteMessage(${msg.id}, 'me');return false;">РЈРґР°Р»РёС‚СЊ Сѓ РјРµРЅСЏ</a>
                         </div>`;
                     }
                     let status = '';
                     if (isMe) {
-                        if (msg.read_at) status = '✓✓';
-                        else if (msg.delivered_at) status = '✓';
+                        if (msg.read_at) status = 'вњ“вњ“';
+                        else if (msg.delivered_at) status = 'вњ“';
                     }
 
                     div.className = `d-flex flex-column ${isMe ? 'align-items-end' : 'align-items-start'} mb-2`;
-                    div.innerHTML = `${senderHtml}<div class="msg-bubble ${isMe ? 'msg-sent' : 'msg-received'}">${contentHtml}<div class="text-muted small text-end">${msg.edited_at ? 'изменено' : ''} ${status}</div></div>${actionsHtml}`;
+                    div.innerHTML = `${senderHtml}<div class="msg-bubble ${isMe ? 'msg-sent' : 'msg-received'}">${contentHtml}<div class="text-muted small text-end">${msg.edited_at ? 'РёР·РјРµРЅРµРЅРѕ' : ''} ${status}</div></div>${actionsHtml}`;
                     chatBox.appendChild(div);
                 });
                 chatBox.scrollTop = chatBox.scrollHeight;
@@ -2127,7 +2127,7 @@ function votePoll(pollId, optionIndex) {
     }
     
     async function editMessage(id) {
-        const text = prompt('Новый текст');
+        const text = prompt('РќРѕРІС‹Р№ С‚РµРєСЃС‚');
         if (!text) return;
         await fetch('/api/edit_message', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ id, text }) });
         loadMessages();
@@ -2147,7 +2147,7 @@ function votePoll(pollId, optionIndex) {
         loadMessages();
         socket.emit('presence', { online: true });
         if (chatType === 'private' && activeCall?.restored && activeCall.peerId === peerMeta.id && activeCall.mode !== 'incoming') {
-            showCallOverlay('reconnecting', 'Восстанавливаем звонок...', activeCall);
+            showCallOverlay('reconnecting', 'Р’РѕСЃСЃС‚Р°РЅР°РІР»РёРІР°РµРј Р·РІРѕРЅРѕРє...', activeCall);
             startConnectTimeout();
             socket.emit('call_invite', {
                 to_user_id: activeCall.peerId,
@@ -2190,7 +2190,7 @@ function votePoll(pollId, optionIndex) {
 
     function setCallIdentity(user) {
         if (!callUsername || !callAvatar) return;
-        callUsername.textContent = user?.username || 'Звонок';
+        callUsername.textContent = user?.username || 'Р—РІРѕРЅРѕРє';
         if (user?.avatar) {
             callAvatar.innerHTML = `<img src="${user.avatar}" style="width:100%; height:100%; object-fit:cover;">`;
         } else {
@@ -2206,7 +2206,7 @@ function votePoll(pollId, optionIndex) {
         }
         setCallIdentity(user || activeCall || peerMeta);
         callOverlay.style.display = 'block';
-        callStatus.textContent = statusText || 'Соединение...';
+        callStatus.textContent = statusText || 'РЎРѕРµРґРёРЅРµРЅРёРµ...';
         callAcceptBtn.style.display = mode === 'incoming' ? 'inline-flex' : 'none';
         callDeclineBtn.style.display = mode === 'incoming' ? 'inline-flex' : 'none';
         callEndBtn.style.display = mode === 'incoming' ? 'none' : 'inline-flex';
@@ -2219,7 +2219,7 @@ function votePoll(pollId, optionIndex) {
         callDeclineBtn.style.display = 'none';
         callEndBtn.style.display = 'inline-flex';
         callTimer.textContent = '00:00';
-        callStatus.textContent = 'Готовимся к звонку...';
+        callStatus.textContent = 'Р“РѕС‚РѕРІРёРјСЃСЏ Рє Р·РІРѕРЅРєСѓ...';
         remoteMedia.style.display = 'none';
         remoteMedia.srcObject = null;
         localPreview.style.display = 'none';
@@ -2228,12 +2228,12 @@ function votePoll(pollId, optionIndex) {
 
     if (activeCall) {
         if (activeCall.mode !== 'incoming') {
-            showCallOverlay('reconnecting', 'Восстанавливаем звонок...', activeCall);
+            showCallOverlay('reconnecting', 'Р’РѕСЃСЃС‚Р°РЅР°РІР»РёРІР°РµРј Р·РІРѕРЅРѕРє...', activeCall);
             startConnectTimeout();
         } else {
         showCallOverlay(
             'incoming',
-            activeCall.kind === 'video' ? 'Входящий видео звонок' : 'Входящий звонок',
+            activeCall.kind === 'video' ? 'Р’С…РѕРґСЏС‰РёР№ РІРёРґРµРѕ Р·РІРѕРЅРѕРє' : 'Р’С…РѕРґСЏС‰РёР№ Р·РІРѕРЅРѕРє',
             activeCall
         );
         incomingRingtone?.play().catch(() => {});
@@ -2301,11 +2301,11 @@ function votePoll(pollId, optionIndex) {
                     activeCall.mode = 'active';
                     persistCallState();
                 }
-                callStatus.textContent = 'В эфире';
+                callStatus.textContent = 'Р’ СЌС„РёСЂРµ';
                 startCallClock();
             }
             if (peerConnection.connectionState === 'disconnected') {
-                callStatus.textContent = 'Связь пропала, пытаемся восстановить...';
+                callStatus.textContent = 'РЎРІСЏР·СЊ РїСЂРѕРїР°Р»Р°, РїС‹С‚Р°РµРјСЃСЏ РІРѕСЃСЃС‚Р°РЅРѕРІРёС‚СЊ...';
                 scheduleDisconnectRecovery();
             }
             if (['failed', 'closed'].includes(peerConnection.connectionState)) {
@@ -2342,7 +2342,7 @@ function votePoll(pollId, optionIndex) {
         stopCallClock();
         stopRingtones();
         if (notifyPeer && activeCall?.peerId) {
-            socket.emit('call_end', { to_user_id: activeCall.peerId, reason: 'Звонок завершён' });
+            socket.emit('call_end', { to_user_id: activeCall.peerId, reason: 'Р—РІРѕРЅРѕРє Р·Р°РІРµСЂС€С‘РЅ' });
         }
         if (peerConnection) {
             peerConnection.close();
@@ -2364,7 +2364,7 @@ function votePoll(pollId, optionIndex) {
     async function startOutgoingCall(kind = 'audio') {
         if (chatType !== 'private' || activeCall) return;
         activeCall = { peerId: peerMeta.id, username: peerMeta.username, avatar: peerMeta.avatar, kind, mode: 'outgoing' };
-        showCallOverlay('outgoing', kind === 'video' ? 'Видео звонок...' : 'Звоним...', activeCall);
+        showCallOverlay('outgoing', kind === 'video' ? 'Р’РёРґРµРѕ Р·РІРѕРЅРѕРє...' : 'Р—РІРѕРЅРёРј...', activeCall);
         stopRingtones();
         outgoingRingtone?.play().catch(() => {});
         startConnectTimeout();
@@ -2381,8 +2381,8 @@ function votePoll(pollId, optionIndex) {
 
     async function handleSignal(signal, fromUserId) {
         if (signal.type === 'offer') {
-            // Если звонок уже активен — это рenegotiation (напр. screen share),
-            // не сбрасываем UI и таймер
+            // Р•СЃР»Рё Р·РІРѕРЅРѕРє СѓР¶Рµ Р°РєС‚РёРІРµРЅ вЂ” СЌС‚Рѕ СЂenegotiation (РЅР°РїСЂ. screen share),
+            // РЅРµ СЃР±СЂР°СЃС‹РІР°РµРј UI Рё С‚Р°Р№РјРµСЂ
             const isRenegotiation = activeCall && activeCall.mode === 'active';
             await ensureLocalStream({ audio: true, video: activeCall?.kind === 'video' });
             await ensurePeerConnection();
@@ -2393,7 +2393,7 @@ function votePoll(pollId, optionIndex) {
             if (!isRenegotiation) {
                 activeCall.mode = 'connecting';
                 startConnectTimeout();
-                showCallOverlay('active', 'Соединяем...', activeCall);
+                showCallOverlay('active', 'РЎРѕРµРґРёРЅСЏРµРј...', activeCall);
             }
         } else if (signal.type === 'answer' && peerConnection) {
             const isRenegotiation = activeCall && activeCall.mode === 'active';
@@ -2401,7 +2401,7 @@ function votePoll(pollId, optionIndex) {
             if (!isRenegotiation) {
                 activeCall.mode = 'connecting';
                 startConnectTimeout();
-                showCallOverlay('active', 'Соединяем...', activeCall);
+                showCallOverlay('active', 'РЎРѕРµРґРёРЅСЏРµРј...', activeCall);
             }
         } else if (signal.type === 'ice' && peerConnection && signal.candidate) {
             try { await peerConnection.addIceCandidate(new RTCIceCandidate(signal.candidate)); } catch (error) { console.error(error); }
@@ -2415,13 +2415,13 @@ function votePoll(pollId, optionIndex) {
         stopRingtones();
         activeCall.mode = 'connecting';
         startConnectTimeout();
-        showCallOverlay('active', 'Подключаемся...', activeCall);
+        showCallOverlay('active', 'РџРѕРґРєР»СЋС‡Р°РµРјСЃСЏ...', activeCall);
         await ensureLocalStream({ audio: true, video: activeCall.kind === 'video' });
         socket.emit('call_accept', { to_user_id: activeCall.peerId, chat_id: activeCall.chatId, kind: activeCall.kind });
     });
     callDeclineBtn?.addEventListener('click', () => {
         if (!activeCall) return;
-        socket.emit('call_decline', { to_user_id: activeCall.peerId, reason: 'Отклонено' });
+        socket.emit('call_decline', { to_user_id: activeCall.peerId, reason: 'РћС‚РєР»РѕРЅРµРЅРѕ' });
         finishCall(false);
     });
     callEndBtn?.addEventListener('click', () => finishCall(true));
@@ -2483,7 +2483,7 @@ function votePoll(pollId, optionIndex) {
             };
         } catch (error) {
             console.error("Screen share error:", error);
-            alert("Ошибка при включении демонстрации экрана");
+            alert("РћС€РёР±РєР° РїСЂРё РІРєР»СЋС‡РµРЅРёРё РґРµРјРѕРЅСЃС‚СЂР°С†РёРё СЌРєСЂР°РЅР°");
         }
     });
 
@@ -2491,7 +2491,7 @@ function votePoll(pollId, optionIndex) {
     socket.on('call_invite', (data) => {
         if (data.from_id === currentUserId || activeCall) return;
         activeCall = { peerId: data.from_id, chatId: data.chat_id, username: data.from_username, avatar: data.from_avatar, kind: data.kind || 'audio', mode: 'incoming' };
-        showCallOverlay('incoming', data.kind === 'video' ? 'Входящий видео звонок' : 'Входящий звонок', activeCall);
+        showCallOverlay('incoming', data.kind === 'video' ? 'Р’С…РѕРґСЏС‰РёР№ РІРёРґРµРѕ Р·РІРѕРЅРѕРє' : 'Р’С…РѕРґСЏС‰РёР№ Р·РІРѕРЅРѕРє', activeCall);
         stopRingtones();
         incomingRingtone?.play().catch(() => {});
     });
@@ -2500,13 +2500,13 @@ function votePoll(pollId, optionIndex) {
         activeCall.mode = 'connecting';
         startConnectTimeout();
         stopRingtones();
-        showCallOverlay('active', 'Соединяем...', activeCall);
+        showCallOverlay('active', 'РЎРѕРµРґРёРЅСЏРµРј...', activeCall);
         await ensurePeerConnection();
         await sendOffer();
     });
     socket.on('call_declined', (data) => {
         if (activeCall && data.from_id === activeCall.peerId) {
-            alert(data.reason || 'Звонок отклонён');
+            alert(data.reason || 'Р—РІРѕРЅРѕРє РѕС‚РєР»РѕРЅС‘РЅ');
             finishCall(false);
         }
     });
@@ -2555,10 +2555,10 @@ function votePoll(pollId, optionIndex) {
 <p class="text-muted mb-2">{{ user.bio }}</p>
 <div class="d-flex gap-3 mb-2">
     <span class="badge-vibers">
-        <i class="bi bi-heart-fill"></i> {{ user.followers.count() }} вайберов
+        <i class="bi bi-heart-fill"></i> {{ user.followers.count() }} РІР°Р№Р±РµСЂРѕРІ
     </span>
     <span class="badge bg-secondary">
-        {{ user.following.count() }} подписок
+        {{ user.following.count() }} РїРѕРґРїРёСЃРѕРє
     </span>
 </div>
 </div> 
@@ -2573,37 +2573,37 @@ function votePoll(pollId, optionIndex) {
     
     {% if is_following.value %}
         <a href="{{ url_for('unfollow_user', user_id=user.id) }}" class="btn btn-outline-danger rounded-pill follow-btn px-4">
-            <i class="bi bi-heart-fill"></i> Отписаться
+            <i class="bi bi-heart-fill"></i> РћС‚РїРёСЃР°С‚СЊСЃСЏ
         </a>
     {% else %}
         <a href="{{ url_for('follow_user', user_id=user.id) }}" class="btn btn-primary rounded-pill follow-btn px-4">
-            <i class="bi bi-heart"></i> Вайбнуться
+            <i class="bi bi-heart"></i> Р’Р°Р№Р±РЅСѓС‚СЊСЃСЏ
         </a>
     {% endif %}
 
     {% if friendship_status == 'accepted' %} 
-    <a href="{{ url_for('messenger', type='private', chat_id=user.id) }}" class="btn btn-success rounded-pill px-4">Сообщение</a> 
-    <a href="{{ url_for('remove_friend', user_id=user.id) }}" class="btn btn-outline-danger rounded-pill">Удалить из друзей</a> 
+    <a href="{{ url_for('messenger', type='private', chat_id=user.id) }}" class="btn btn-success rounded-pill px-4">РЎРѕРѕР±С‰РµРЅРёРµ</a> 
+    <a href="{{ url_for('remove_friend', user_id=user.id) }}" class="btn btn-outline-danger rounded-pill">РЈРґР°Р»РёС‚СЊ РёР· РґСЂСѓР·РµР№</a> 
     {% elif friendship_status == 'pending_sent' %} 
-    <button class="btn btn-secondary rounded-pill px-4" disabled>Запрос отправлен</button> 
+    <button class="btn btn-secondary rounded-pill px-4" disabled>Р—Р°РїСЂРѕСЃ РѕС‚РїСЂР°РІР»РµРЅ</button> 
     {% elif friendship_status == 'pending_received' %} 
-    <a href="{{ url_for('accept_friend', user_id=user.id) }}" class="btn btn-success rounded-pill px-4">Принять</a> 
+    <a href="{{ url_for('accept_friend', user_id=user.id) }}" class="btn btn-success rounded-pill px-4">РџСЂРёРЅСЏС‚СЊ</a> 
     {% else %} 
-    <a href="{{ url_for('add_friend', user_id=user.id) }}" class="btn btn-outline-primary rounded-pill px-4">Добавить в друзья</a> 
+    <a href="{{ url_for('add_friend', user_id=user.id) }}" class="btn btn-outline-primary rounded-pill px-4">Р”РѕР±Р°РІРёС‚СЊ РІ РґСЂСѓР·СЊСЏ</a> 
     {% endif %} 
 
     {% if current_user.is_admin %}
         <a href="{{ url_for('admin_ban_user', user_id=user.id) }}" class="btn btn-danger rounded-pill">
-            {% if user.is_banned %}Разбанить{% else %}ЗАБАНИТЬ{% endif %}
+            {% if user.is_banned %}Р Р°Р·Р±Р°РЅРёС‚СЊ{% else %}Р—РђР‘РђРќРРўР¬{% endif %}
         </a>
         <a href="{{ url_for('admin_verify_user', user_id=user.id) }}" class="btn btn-info text-white rounded-pill">
-            {% if user.is_verified %}Снять галку{% else %}Дать галку{% endif %}
+            {% if user.is_verified %}РЎРЅСЏС‚СЊ РіР°Р»РєСѓ{% else %}Р”Р°С‚СЊ РіР°Р»РєСѓ{% endif %}
         </a>
     {% endif %}
-    <a href="{{ url_for('report', user_id=user.id) }}" class="btn btn-outline-danger rounded-pill">Пожаловаться</a>
+    <a href="{{ url_for('report', user_id=user.id) }}" class="btn btn-outline-danger rounded-pill">РџРѕР¶Р°Р»РѕРІР°С‚СЊСЃСЏ</a>
 
 {% else %} 
-<a href="{{ url_for('settings') }}" class="btn btn-outline-secondary rounded-pill">Настройки</a> 
+<a href="{{ url_for('settings') }}" class="btn btn-outline-secondary rounded-pill">РќР°СЃС‚СЂРѕР№РєРё</a> 
 {% endif %} 
 </div> 
 </div> 
@@ -2611,7 +2611,7 @@ function votePoll(pollId, optionIndex) {
 </div> 
 <div class="row"> 
 <div class="col-md-8 mx-auto"> 
-<h5 class="mb-3 ps-2">Публикации</h5> 
+<h5 class="mb-3 ps-2">РџСѓР±Р»РёРєР°С†РёРё</h5> 
 {% for post in posts %} 
 {% include 'post_card.html' %}
 {% endfor %} 
@@ -2625,7 +2625,7 @@ function votePoll(pollId, optionIndex) {
 <div class="row justify-content-center">
 <div class="col-md-6">
 <div class="card p-4">
-<h3 class="mb-4">Настройки</h3>
+<h3 class="mb-4">РќР°СЃС‚СЂРѕР№РєРё</h3>
 <form action="{{ url_for('update_settings') }}" method="POST" enctype="multipart/form-data">
 <div class="mb-4 text-center">
 {% if current_user.avatar %}
@@ -2637,41 +2637,41 @@ function votePoll(pollId, optionIndex) {
     {{ current_user.username[0].upper() }}
 </div>
 {% endif %}
-<label class="btn btn-sm btn-outline-primary rounded-pill">Изменить фото <input type="file" name="avatar" hidden accept="image/*"></label>
+<label class="btn btn-sm btn-outline-primary rounded-pill">РР·РјРµРЅРёС‚СЊ С„РѕС‚Рѕ <input type="file" name="avatar" hidden accept="image/*"></label>
 </div>
 <div class="mb-4 text-center">
 {% if current_user.banner %}
 <img src="{{ current_user.banner }}" style="width:100%; border-radius:12px; max-height:160px; object-fit:cover;">
 {% endif %}
-<label class="btn btn-sm btn-outline-secondary rounded-pill mt-2">Баннер профиля <input type="file" name="banner" hidden accept="image/*"></label>
+<label class="btn btn-sm btn-outline-secondary rounded-pill mt-2">Р‘Р°РЅРЅРµСЂ РїСЂРѕС„РёР»СЏ <input type="file" name="banner" hidden accept="image/*"></label>
 </div>
 <div class="mb-3">
-<label class="form-label text-muted small">Никнейм</label>
+<label class="form-label text-muted small">РќРёРєРЅРµР№Рј</label>
 <input type="text" name="username" class="form-control" value="{{ current_user.username }}">
 </div>
 <div class="mb-4">
-<label class="form-label text-muted small">Описание</label>
+<label class="form-label text-muted small">РћРїРёСЃР°РЅРёРµ</label>
 <textarea name="bio" class="form-control" rows="3">{{ current_user.bio }}</textarea>
 </div>
 <div class="mb-4">
-<label class="form-label text-muted small">Тема оформления</label>
+<label class="form-label text-muted small">РўРµРјР° РѕС„РѕСЂРјР»РµРЅРёСЏ</label>
 <select name="theme" class="form-select">
-    <option value="light" {% if current_user.theme == 'light' %}selected{% endif %}>☀️ Светлая</option>
-    <option value="dark" {% if current_user.theme == 'dark' %}selected{% endif %}>🌙 Тёмная</option>
+    <option value="light" {% if current_user.theme == 'light' %}selected{% endif %}>вЂпёЏ РЎРІРµС‚Р»Р°СЏ</option>
+    <option value="dark" {% if current_user.theme == 'dark' %}selected{% endif %}>рџЊ™ РўС‘РјРЅР°СЏ</option>
 </select>
 </div>
 <div class="mb-4">
-<label class="form-label text-muted small">Цветовая схема</label>
+<label class="form-label text-muted small">Р¦РІРµС‚РѕРІР°СЏ СЃС…РµРјР°</label>
 <select name="color_theme" class="form-select">
-    <option value="blue" {% if current_user.color_theme == 'blue' %}selected{% endif %}>Синяя</option>
-    <option value="purple" {% if current_user.color_theme == 'purple' %}selected{% endif %}>Фиолетовая</option>
-    <option value="orange" {% if current_user.color_theme == 'orange' %}selected{% endif %}>Оранжевая</option>
+    <option value="blue" {% if current_user.color_theme == 'blue' %}selected{% endif %}>РЎРёРЅСЏСЏ</option>
+    <option value="purple" {% if current_user.color_theme == 'purple' %}selected{% endif %}>Р¤РёРѕР»РµС‚РѕРІР°СЏ</option>
+    <option value="orange" {% if current_user.color_theme == 'orange' %}selected{% endif %}>РћСЂР°РЅР¶РµРІР°СЏ</option>
 </select>
 </div>
-<button type="submit" class="btn btn-primary w-100 py-2 rounded-pill">Сохранить</button>
+<button type="submit" class="btn btn-primary w-100 py-2 rounded-pill">РЎРѕС…СЂР°РЅРёС‚СЊ</button>
 </form>
 <div class="mt-3 text-center">
-  <a href="{{ url_for('sessions') }}" class="text-decoration-none">История входов и устройства</a>
+  <a href="{{ url_for('sessions') }}" class="text-decoration-none">РСЃС‚РѕСЂРёСЏ РІС…РѕРґРѕРІ Рё СѓСЃС‚СЂРѕР№СЃС‚РІР°</a>
 </div>
 </div>
 </div>
@@ -2687,11 +2687,11 @@ function votePoll(pollId, optionIndex) {
       <h3 class="text-center mb-4 fw-bold">{{ title }}</h3>
       
       {% if show_verify %}
-      <div class="alert alert-info small">📲 Код отправлен в ваш Telegram!</div>
+      <div class="alert alert-info small">рџ“І РљРѕРґ РѕС‚РїСЂР°РІР»РµРЅ РІ РІР°С€ Telegram!</div>
       <form method="POST">
         <input type="hidden" name="action" value="verify_code">
-        <input type="text" name="verify_code" class="form-control mb-3 rounded-pill text-center" placeholder="6-значный код" required maxlength="6" style="font-size: 1.5rem; letter-spacing: 5px;">
-        <button class="btn btn-primary w-100 rounded-pill py-2 fw-bold">Подтвердить</button>
+        <input type="text" name="verify_code" class="form-control mb-3 rounded-pill text-center" placeholder="6-Р·РЅР°С‡РЅС‹Р№ РєРѕРґ" required maxlength="6" style="font-size: 1.5rem; letter-spacing: 5px;">
+        <button class="btn btn-primary w-100 rounded-pill py-2 fw-bold">РџРѕРґС‚РІРµСЂРґРёС‚СЊ</button>
       </form>
       {% else %}
       <form method="POST">
@@ -2699,18 +2699,18 @@ function votePoll(pollId, optionIndex) {
         {% if not is_login %}
         <input type="email" name="email" class="form-control mb-3 rounded-pill" placeholder="Email" required>
         {% endif %}
-        <input type="text" name="username" class="form-control mb-3 rounded-pill" placeholder="Ник" required>
-        <input type="password" name="password" class="form-control mb-3 rounded-pill" placeholder="Пароль" required>
+        <input type="text" name="username" class="form-control mb-3 rounded-pill" placeholder="РќРёРє" required>
+        <input type="password" name="password" class="form-control mb-3 rounded-pill" placeholder="РџР°СЂРѕР»СЊ" required>
         <div class="mb-3">
-          <label class="form-label text-muted small ms-2">Капча: {{ captcha_q }}</label>
-          <input type="text" name="captcha" class="form-control rounded-pill" placeholder="Ответ" required>
+          <label class="form-label text-muted small ms-2">РљР°РїС‡Р°: {{ captcha_q }}</label>
+          <input type="text" name="captcha" class="form-control rounded-pill" placeholder="РћС‚РІРµС‚" required>
         </div>
-        <button class="btn btn-primary w-100 rounded-pill py-2 fw-bold">{{ 'Войти' if is_login else 'Зарегистрироваться' }}</button>
+        <button class="btn btn-primary w-100 rounded-pill py-2 fw-bold">{{ 'Р’РѕР№С‚Рё' if is_login else 'Р—Р°СЂРµРіРёСЃС‚СЂРёСЂРѕРІР°С‚СЊСЃСЏ' }}</button>
       </form>
       {% endif %}
       
       <div class="text-center mt-4">
-        <a href="{{ url_for('login' if not is_login else 'register') }}" class="text-decoration-none text-primary">{{ 'Уже есть аккаунт? Войти' if not is_login else 'Нет аккаунта? Регистрация' }}</a>
+        <a href="{{ url_for('login' if not is_login else 'register') }}" class="text-decoration-none text-primary">{{ 'РЈР¶Рµ РµСЃС‚СЊ Р°РєРєР°СѓРЅС‚? Р’РѕР№С‚Рё' if not is_login else 'РќРµС‚ Р°РєРєР°СѓРЅС‚Р°? Р РµРіРёСЃС‚СЂР°С†РёСЏ' }}</a>
       </div>
     </div>
   </div>
@@ -2723,21 +2723,21 @@ function votePoll(pollId, optionIndex) {
 {% block content %}
 <div class="row justify-content-center">
   <div class="col-md-8">
-    <h3 class="mb-3">Уведомления</h3>
+    <h3 class="mb-3">РЈРІРµРґРѕРјР»РµРЅРёСЏ</h3>
     {% if notifications %}
       {% for n in notifications %}
       <div class="card p-3 mb-2 {% if not n.is_read %}border-primary{% endif %}">
         <div class="d-flex justify-content-between align-items-center">
           <div>
-            <strong>{{ n.ntype }}</strong> — {{ n.message or '' }}
-            {% if n.link %}<a href="{{ n.link }}" class="ms-2">Открыть</a>{% endif %}
+            <strong>{{ n.ntype }}</strong> вЂ” {{ n.message or '' }}
+            {% if n.link %}<a href="{{ n.link }}" class="ms-2">РћС‚РєСЂС‹С‚СЊ</a>{% endif %}
           </div>
           <small class="text-muted">{{ n.timestamp|time_ago }}</small>
         </div>
       </div>
       {% endfor %}
     {% else %}
-      <div class="alert alert-light text-center">Нет уведомлений</div>
+      <div class="alert alert-light text-center">РќРµС‚ СѓРІРµРґРѕРјР»РµРЅРёР№</div>
     {% endif %}
   </div>
 </div>
@@ -2759,7 +2759,7 @@ function votePoll(pollId, optionIndex) {
 </style>
 
 <div class="d-flex justify-content-between align-items-center mb-4">
-    <h3 class="fw-bold mb-0"><i class="bi bi-shield-fill-check me-2 text-danger"></i>Панель Администратора</h3>
+    <h3 class="fw-bold mb-0"><i class="bi bi-shield-fill-check me-2 text-danger"></i>РџР°РЅРµР»СЊ РђРґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂР°</h3>
     <span class="badge bg-danger fs-6 rounded-pill px-3">ADMIN</span>
 </div>
 
@@ -2768,53 +2768,53 @@ function votePoll(pollId, optionIndex) {
     <div class="col-6 col-md-3">
         <div class="admin-stat" style="--grad-a:#2563eb; --grad-b:#1d4ed8;">
             <h2>{{ online_count }}</h2>
-            <p><i class="bi bi-circle-fill" style="color:#86efac;"></i> Онлайн сейчас</p>
+            <p><i class="bi bi-circle-fill" style="color:#86efac;"></i> РћРЅР»Р°Р№РЅ СЃРµР№С‡Р°СЃ</p>
         </div>
     </div>
     <div class="col-6 col-md-3">
         <div class="admin-stat" style="--grad-a:#7c3aed; --grad-b:#5b21b6;">
             <h2>{{ peak_online }}</h2>
-            <p><i class="bi bi-graph-up-arrow"></i> Пик онлайн</p>
+            <p><i class="bi bi-graph-up-arrow"></i> РџРёРє РѕРЅР»Р°Р№РЅ</p>
         </div>
     </div>
     <div class="col-6 col-md-3">
         <div class="admin-stat" style="--grad-a:#f97316; --grad-b:#ea580c;">
             <h2>{{ total_visitors }}</h2>
-            <p><i class="bi bi-people-fill"></i> Всего посещений</p>
+            <p><i class="bi bi-people-fill"></i> Р’СЃРµРіРѕ РїРѕСЃРµС‰РµРЅРёР№</p>
         </div>
     </div>
     <div class="col-6 col-md-3">
         <div class="admin-stat" style="--grad-a:#059669; --grad-b:#047857;">
             <h2>{{ total_users }}</h2>
-            <p><i class="bi bi-person-check-fill"></i> Пользователей</p>
+            <p><i class="bi bi-person-check-fill"></i> РџРѕР»СЊР·РѕРІР°С‚РµР»РµР№</p>
         </div>
     </div>
     <div class="col-6 col-md-3">
         <div class="admin-stat" style="--grad-a:#db2777; --grad-b:#be185d;">
             <h2>{{ total_posts }}</h2>
-            <p><i class="bi bi-file-post-fill"></i> Всего постов</p>
+            <p><i class="bi bi-file-post-fill"></i> Р’СЃРµРіРѕ РїРѕСЃС‚РѕРІ</p>
         </div>
     </div>
     <div class="col-6 col-md-3">
         <div class="admin-stat" style="--grad-a:#0891b2; --grad-b:#0e7490;">
             <h2>{{ total_flux }}</h2>
-            <p><i class="bi bi-play-btn-fill"></i> Flux видео</p>
+            <p><i class="bi bi-play-btn-fill"></i> Flux РІРёРґРµРѕ</p>
         </div>
     </div>
     <div class="col-12 col-md-6">
         <div class="card p-3 h-100">
-            <h6 class="fw-bold mb-3">Быстрые действия</h6>
+            <h6 class="fw-bold mb-3">Р‘С‹СЃС‚СЂС‹Рµ РґРµР№СЃС‚РІРёСЏ</h6>
             <div class="d-flex flex-wrap gap-2">
-                <a href="{{ url_for('admin_reports') }}" class="btn btn-outline-danger rounded-pill"><i class="bi bi-flag-fill me-1"></i>Жалобы</a>
-                <a href="{{ url_for('users_list') }}" class="btn btn-outline-primary rounded-pill"><i class="bi bi-people-fill me-1"></i>Все пользователи</a>
-                <a href="{{ url_for('admin_flux_list') }}" class="btn btn-outline-secondary rounded-pill"><i class="bi bi-play-btn-fill me-1"></i>Flux видео</a>
-                <a href="{{ url_for('admin_ai_chats') }}" class="btn btn-outline-primary rounded-pill"><i class="bi bi-robot me-1"></i>FontanAI чаты</a>
+                <a href="{{ url_for('admin_reports') }}" class="btn btn-outline-danger rounded-pill"><i class="bi bi-flag-fill me-1"></i>Р–Р°Р»РѕР±С‹</a>
+                <a href="{{ url_for('users_list') }}" class="btn btn-outline-primary rounded-pill"><i class="bi bi-people-fill me-1"></i>Р’СЃРµ РїРѕР»СЊР·РѕРІР°С‚РµР»Рё</a>
+                <a href="{{ url_for('admin_flux_list') }}" class="btn btn-outline-secondary rounded-pill"><i class="bi bi-play-btn-fill me-1"></i>Flux РІРёРґРµРѕ</a>
+                <a href="{{ url_for('admin_ai_chats') }}" class="btn btn-outline-primary rounded-pill"><i class="bi bi-robot me-1"></i>FontanAI С‡Р°С‚С‹</a>
             </div>
             <hr>
-            <h6 class="fw-bold mb-2">Рассылка всем</h6>
+            <h6 class="fw-bold mb-2">Р Р°СЃСЃС‹Р»РєР° РІСЃРµРј</h6>
             <form method="POST" action="{{ url_for('admin_broadcast') }}" class="d-flex gap-2">
-                <input type="text" name="message" class="form-control rounded-pill" placeholder="Введите сообщение..." required>
-                <button class="btn btn-primary rounded-pill px-4">Отправить</button>
+                <input type="text" name="message" class="form-control rounded-pill" placeholder="Р’РІРµРґРёС‚Рµ СЃРѕРѕР±С‰РµРЅРёРµ..." required>
+                <button class="btn btn-primary rounded-pill px-4">РћС‚РїСЂР°РІРёС‚СЊ</button>
             </form>
         </div>
     </div>
@@ -2824,13 +2824,13 @@ function votePoll(pollId, optionIndex) {
 <div class="row g-3 mb-4">
     <div class="col-md-6">
         <div class="card p-3">
-            <h6 class="fw-bold mb-3">Новые пользователи (14 дней)</h6>
+            <h6 class="fw-bold mb-3">РќРѕРІС‹Рµ РїРѕР»СЊР·РѕРІР°С‚РµР»Рё (14 РґРЅРµР№)</h6>
             <canvas id="usersChart" height="160"></canvas>
         </div>
     </div>
     <div class="col-md-6">
         <div class="card p-3">
-            <h6 class="fw-bold mb-3">Новые посты (14 дней)</h6>
+            <h6 class="fw-bold mb-3">РќРѕРІС‹Рµ РїРѕСЃС‚С‹ (14 РґРЅРµР№)</h6>
             <canvas id="postsChart" height="160"></canvas>
         </div>
     </div>
@@ -2847,12 +2847,12 @@ const chartDefaults = {
 };
 new Chart(document.getElementById('usersChart'), {
     type: 'line',
-    data: { labels, datasets: [{ ...chartDefaults, label: 'Пользователи', data: {{ users_data|tojson }}, borderColor:'#2563eb', backgroundColor:'rgba(37,99,235,.12)' }] },
+    data: { labels, datasets: [{ ...chartDefaults, label: 'РџРѕР»СЊР·РѕРІР°С‚РµР»Рё', data: {{ users_data|tojson }}, borderColor:'#2563eb', backgroundColor:'rgba(37,99,235,.12)' }] },
     options: { plugins:{ legend:{display:false} }, scales:{ y:{ beginAtZero:true, ticks:{stepSize:1} } } }
 });
 new Chart(document.getElementById('postsChart'), {
     type: 'line',
-    data: { labels, datasets: [{ ...chartDefaults, label: 'Посты', data: {{ posts_data|tojson }}, borderColor:'#f97316', backgroundColor:'rgba(249,115,22,.12)' }] },
+    data: { labels, datasets: [{ ...chartDefaults, label: 'РџРѕСЃС‚С‹', data: {{ posts_data|tojson }}, borderColor:'#f97316', backgroundColor:'rgba(249,115,22,.12)' }] },
     options: { plugins:{ legend:{display:false} }, scales:{ y:{ beginAtZero:true, ticks:{stepSize:1} } } }
 });
 </script>
@@ -2862,20 +2862,20 @@ new Chart(document.getElementById('postsChart'), {
 {% extends "base.html" %}
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-4">
-    <h3 class="fw-bold mb-0"><i class="bi bi-play-btn-fill me-2 text-primary"></i>Управление Flux видео</h3>
-    <a href="{{ url_for('admin_dashboard') }}" class="btn btn-outline-secondary rounded-pill"><i class="bi bi-arrow-left me-1"></i>Назад</a>
+    <h3 class="fw-bold mb-0"><i class="bi bi-play-btn-fill me-2 text-primary"></i>РЈРїСЂР°РІР»РµРЅРёРµ Flux РІРёРґРµРѕ</h3>
+    <a href="{{ url_for('admin_dashboard') }}" class="btn btn-outline-secondary rounded-pill"><i class="bi bi-arrow-left me-1"></i>РќР°Р·Р°Рґ</a>
 </div>
 <div class="row g-3 mb-4">
     <div class="col-6 col-md-3">
         <div class="card p-3 text-center border-0" style="background:linear-gradient(135deg,#2563eb,#1d4ed8);color:#fff;border-radius:16px;">
             <h3 class="fw-bold mb-0">{{ total }}</h3>
-            <small>Всего видео</small>
+            <small>Р’СЃРµРіРѕ РІРёРґРµРѕ</small>
         </div>
     </div>
     <div class="col-6 col-md-3">
         <div class="card p-3 text-center border-0" style="background:linear-gradient(135deg,#f97316,#ea580c);color:#fff;border-radius:16px;">
             <h3 class="fw-bold mb-0">{{ total_views }}</h3>
-            <small>Всего просмотров</small>
+            <small>Р’СЃРµРіРѕ РїСЂРѕСЃРјРѕС‚СЂРѕРІ</small>
         </div>
     </div>
 </div>
@@ -2884,12 +2884,12 @@ new Chart(document.getElementById('postsChart'), {
     <thead style="background:var(--hover-bg);">
         <tr>
             <th class="ps-3">ID</th>
-            <th>Автор</th>
-            <th>Описание</th>
-            <th>Просмотры</th>
-            <th>Лайки</th>
-            <th>Дата</th>
-            <th>Действие</th>
+            <th>РђРІС‚РѕСЂ</th>
+            <th>РћРїРёСЃР°РЅРёРµ</th>
+            <th>РџСЂРѕСЃРјРѕС‚СЂС‹</th>
+            <th>Р›Р°Р№РєРё</th>
+            <th>Р”Р°С‚Р°</th>
+            <th>Р”РµР№СЃС‚РІРёРµ</th>
         </tr>
     </thead>
     <tbody>
@@ -2902,22 +2902,22 @@ new Chart(document.getElementById('postsChart'), {
             </a>
         </td>
         <td class="text-muted small" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
-            {{ v.description or '—' }}
+            {{ v.description or 'вЂ”' }}
         </td>
         <td><i class="bi bi-eye me-1"></i>{{ v.views }}</td>
         <td><i class="bi bi-heart me-1 text-danger"></i>{{ v.likes }}</td>
         <td class="text-muted small">{{ v.timestamp|time_ago }}</td>
         <td>
             <form method="POST" action="{{ url_for('admin_delete_flux', video_id=v.id) }}"
-                  onsubmit="return confirm('Удалить это видео?');" style="display:inline;">
+                  onsubmit="return confirm('РЈРґР°Р»РёС‚СЊ СЌС‚Рѕ РІРёРґРµРѕ?');" style="display:inline;">
                 <button type="submit" class="btn btn-sm btn-outline-danger rounded-pill">
-                    <i class="bi bi-trash-fill"></i> Удалить
+                    <i class="bi bi-trash-fill"></i> РЈРґР°Р»РёС‚СЊ
                 </button>
             </form>
         </td>
     </tr>
     {% else %}
-    <tr><td colspan="7" class="text-center text-muted py-4">Нет видео</td></tr>
+    <tr><td colspan="7" class="text-center text-muted py-4">РќРµС‚ РІРёРґРµРѕ</td></tr>
     {% endfor %}
     </tbody>
 </table>
@@ -2929,10 +2929,10 @@ new Chart(document.getElementById('postsChart'), {
 {% block content %}
 <div class="row justify-content-center">
   <div class="col-md-8">
-    <h3 class="mb-3">Жалобы</h3>
+    <h3 class="mb-3">Р–Р°Р»РѕР±С‹</h3>
     {% for r in reports %}
     <div class="card p-3 mb-2">
-      <div><strong>ID:</strong> {{ r.id }} · {{ r.reason }} · {{ r.status }}</div>
+      <div><strong>ID:</strong> {{ r.id }} В· {{ r.reason }} В· {{ r.status }}</div>
       <div class="text-muted small">{{ r.timestamp|time_ago }}</div>
     </div>
     {% endfor %}
@@ -2945,13 +2945,13 @@ new Chart(document.getElementById('postsChart'), {
 {% block content %}
 <div class="row justify-content-center">
   <div class="col-md-8">
-    <h3 class="mb-3">Активные сеансы</h3>
-    <a href="{{ url_for('logout_all') }}" class="btn btn-danger mb-3">Выйти со всех устройств</a>
+    <h3 class="mb-3">РђРєС‚РёРІРЅС‹Рµ СЃРµР°РЅСЃС‹</h3>
+    <a href="{{ url_for('logout_all') }}" class="btn btn-danger mb-3">Р’С‹Р№С‚Рё СЃРѕ РІСЃРµС… СѓСЃС‚СЂРѕР№СЃС‚РІ</a>
     {% for s in sessions %}
     <div class="card p-3 mb-2">
-      <div><strong>IP:</strong> {{ s.ip }} · <strong>Город:</strong> {{ s.city or '—' }}</div>
+      <div><strong>IP:</strong> {{ s.ip }} В· <strong>Р“РѕСЂРѕРґ:</strong> {{ s.city or 'вЂ”' }}</div>
       <div class="text-muted small">{{ s.user_agent }}</div>
-      <div class="text-muted small">Последняя активность: {{ s.last_seen|time_ago }}</div>
+      <div class="text-muted small">РџРѕСЃР»РµРґРЅСЏСЏ Р°РєС‚РёРІРЅРѕСЃС‚СЊ: {{ s.last_seen|time_ago }}</div>
     </div>
     {% endfor %}
   </div>
@@ -2961,16 +2961,16 @@ new Chart(document.getElementById('postsChart'), {
     'search.html': """
 {% extends "base.html" %}
 {% block content %}
-<h3 class="mb-3">Результаты поиска: "{{ q }}"</h3>
+<h3 class="mb-3">Р РµР·СѓР»СЊС‚Р°С‚С‹ РїРѕРёСЃРєР°: "{{ q }}"</h3>
 <div class="row">
   <div class="col-md-4">
-    <h5>Пользователи</h5>
+    <h5>РџРѕР»СЊР·РѕРІР°С‚РµР»Рё</h5>
     {% for u in users %}
     <div class="card p-2 mb-2">
       <a href="{{ url_for('profile', username=u.username) }}">{{ u.username }}</a>
     </div>
     {% endfor %}
-    <h5 class="mt-4">Группы</h5>
+    <h5 class="mt-4">Р“СЂСѓРїРїС‹</h5>
     {% for g in groups %}
     <div class="card p-2 mb-2">
       {{ g.name }}
@@ -2978,7 +2978,7 @@ new Chart(document.getElementById('postsChart'), {
     {% endfor %}
   </div>
   <div class="col-md-8">
-    <h5>Посты и хэштеги</h5>
+    <h5>РџРѕСЃС‚С‹ Рё С…СЌС€С‚РµРіРё</h5>
     {% for post in posts %}
       {% include 'post_card.html' %}
     {% endfor %}
@@ -2995,7 +2995,7 @@ new Chart(document.getElementById('postsChart'), {
   {% else %}
     <img src="{{ story.media_url }}" style="max-width:100%; border-radius:12px;">
   {% endif %}
-  <div class="text-muted mt-2">История исчезнет: {{ story.expires_at|time_ago }}</div>
+  <div class="text-muted mt-2">РСЃС‚РѕСЂРёСЏ РёСЃС‡РµР·РЅРµС‚: {{ story.expires_at|time_ago }}</div>
 </div>
 {% endblock %}
 """,
@@ -3160,7 +3160,7 @@ new Chart(document.getElementById('postsChart'), {
         <div class="d-flex align-items-center justify-content-center" style="height:100%; color:#fff;">
             <div class="text-center opacity-50">
                 <i class="bi bi-play-btn" style="font-size:4rem;"></i>
-                <h5 class="mt-3">Пока нет видео. Будь первым!</h5>
+                <h5 class="mt-3">РџРѕРєР° РЅРµС‚ РІРёРґРµРѕ. Р‘СѓРґСЊ РїРµСЂРІС‹Рј!</h5>
             </div>
         </div>
         {% endfor %}
@@ -3168,10 +3168,10 @@ new Chart(document.getElementById('postsChart'), {
 </div>
 
 <!-- FABs -->
-<button class="flux-upload-fab" data-bs-toggle="modal" data-bs-target="#uploadFluxModal" title="Загрузить">
+<button class="flux-upload-fab" data-bs-toggle="modal" data-bs-target="#uploadFluxModal" title="Р—Р°РіСЂСѓР·РёС‚СЊ">
     <i class="bi bi-plus-lg"></i>
 </button>
-<a href="{{ url_for('flux_my_videos') }}" class="flux-my-btn" title="Мои видео">
+<a href="{{ url_for('flux_my_videos') }}" class="flux-my-btn" title="РњРѕРё РІРёРґРµРѕ">
     <i class="bi bi-person-video3"></i>
 </a>
 
@@ -3179,16 +3179,16 @@ new Chart(document.getElementById('postsChart'), {
 <div class="drawer-backdrop" id="drawer-backdrop" onclick="closeComments()"></div>
 <div class="flux-comments-drawer" id="comments-drawer">
     <div class="drawer-header">
-        <span class="fw-bold">Комментарии</span>
+        <span class="fw-bold">РљРѕРјРјРµРЅС‚Р°СЂРёРё</span>
         <button class="btn btn-sm text-white opacity-60" onclick="closeComments()" style="background:none; border:none;">
             <i class="bi bi-x-lg fs-5"></i>
         </button>
     </div>
     <div class="drawer-comments-list" id="drawer-comments-list">
-        <div class="text-center opacity-40 py-3 small">Загрузка...</div>
+        <div class="text-center opacity-40 py-3 small">Р—Р°РіСЂСѓР·РєР°...</div>
     </div>
     <div class="drawer-input-row">
-        <input type="text" id="comment-input" placeholder="Написать комментарий..." maxlength="300">
+        <input type="text" id="comment-input" placeholder="РќР°РїРёСЃР°С‚СЊ РєРѕРјРјРµРЅС‚Р°СЂРёР№..." maxlength="300">
         <button onclick="submitComment()"><i class="bi bi-send-fill"></i></button>
     </div>
 </div>
@@ -3198,13 +3198,13 @@ new Chart(document.getElementById('postsChart'), {
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content" style="background:#1a1a2e; color:#fff; border-radius:20px; border:1px solid rgba(255,255,255,.1);">
             <div class="modal-header border-0 pb-0">
-                <h5 class="modal-title fw-bold"><i class="bi bi-play-btn-fill me-2" style="color:#7c3aed;"></i>Выложить Flux</h5>
+                <h5 class="modal-title fw-bold"><i class="bi bi-play-btn-fill me-2" style="color:#7c3aed;"></i>Р’С‹Р»РѕР¶РёС‚СЊ Flux</h5>
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
             </div>
             <form action="{{ url_for('upload_flux') }}" method="POST" enctype="multipart/form-data">
                 <div class="modal-body">
                     <div class="mb-3">
-                        <label class="form-label small opacity-60">Видео (вертикальный формат)</label>
+                        <label class="form-label small opacity-60">Р’РёРґРµРѕ (РІРµСЂС‚РёРєР°Р»СЊРЅС‹Р№ С„РѕСЂРјР°С‚)</label>
                         <input type="file" name="video" class="form-control"
                                style="background:rgba(255,255,255,0.07); color:#fff; border-color:rgba(255,255,255,0.15);"
                                accept="video/*" required>
@@ -3212,13 +3212,13 @@ new Chart(document.getElementById('postsChart'), {
                     <div class="mb-3">
                         <textarea name="description" class="form-control"
                                   style="background:rgba(255,255,255,0.07); color:#fff; border-color:rgba(255,255,255,0.15);"
-                                  rows="3" placeholder="Описание..."></textarea>
+                                  rows="3" placeholder="РћРїРёСЃР°РЅРёРµ..."></textarea>
                     </div>
                 </div>
                 <div class="modal-footer border-0 pt-0">
                     <button type="submit" class="btn w-100 rounded-pill fw-bold"
                             style="background:linear-gradient(135deg,#4f46e5,#7c3aed); color:#fff;">
-                        Опубликовать <i class="bi bi-send-fill ms-1"></i>
+                        РћРїСѓР±Р»РёРєРѕРІР°С‚СЊ <i class="bi bi-send-fill ms-1"></i>
                     </button>
                 </div>
             </form>
@@ -3233,7 +3233,7 @@ new Chart(document.getElementById('postsChart'), {
     // Auto-play on scroll
     const container = document.getElementById('flux-container');
     let currentVideo = null;
-    const viewedSet = new Set(); // Дедупликация просмотров в рамках сессии браузера
+    const viewedSet = new Set(); // Р”РµРґСѓРїР»РёРєР°С†РёСЏ РїСЂРѕСЃРјРѕС‚СЂРѕРІ РІ СЂР°РјРєР°С… СЃРµСЃСЃРёРё Р±СЂР°СѓР·РµСЂР°
 
     const observer = new IntersectionObserver((entries) => {
         entries.forEach(entry => {
@@ -3247,7 +3247,7 @@ new Chart(document.getElementById('postsChart'), {
                 }
                 video.play().catch(() => {});
                 currentVideo = video;
-                // Считаем просмотр только один раз за сессию страницы
+                // РЎС‡РёС‚Р°РµРј РїСЂРѕСЃРјРѕС‚СЂ С‚РѕР»СЊРєРѕ РѕРґРёРЅ СЂР°Р· Р·Р° СЃРµСЃСЃРёСЋ СЃС‚СЂР°РЅРёС†С‹
                 if (vidId && !viewedSet.has(vidId)) {
                     viewedSet.add(vidId);
                     fetch(`/flux/view/${vidId}`, { method: 'POST' });
@@ -3260,7 +3260,7 @@ new Chart(document.getElementById('postsChart'), {
 
     document.querySelectorAll('.flux-item').forEach(item => observer.observe(item));
 
-    // Авто-скролл к видео по якорю в URL (например /flux#video-42)
+    // РђРІС‚Рѕ-СЃРєСЂРѕР»Р» Рє РІРёРґРµРѕ РїРѕ СЏРєРѕСЂСЋ РІ URL (РЅР°РїСЂРёРјРµСЂ /flux#video-42)
     if (window.location.hash) {
         const target = document.querySelector(window.location.hash);
         if (target) {
@@ -3292,7 +3292,7 @@ new Chart(document.getElementById('postsChart'), {
             navigator.clipboard.writeText(full).then(() => {
                 const toast = document.createElement('div');
                 toast.className = 'position-fixed bottom-0 start-50 translate-middle-x mb-5';
-                toast.innerHTML = '<div class="alert alert-dark text-white px-4 py-2 rounded-pill shadow">Ссылка скопирована!</div>';
+                toast.innerHTML = '<div class="alert alert-dark text-white px-4 py-2 rounded-pill shadow">РЎСЃС‹Р»РєР° СЃРєРѕРїРёСЂРѕРІР°РЅР°!</div>';
                 document.body.appendChild(toast);
                 setTimeout(() => toast.remove(), 2000);
             });
@@ -3304,7 +3304,7 @@ new Chart(document.getElementById('postsChart'), {
         const list = document.getElementById('drawer-comments-list');
         const comments = allComments[videoId] || [];
         if (comments.length === 0) {
-            list.innerHTML = '<div class="text-center opacity-40 py-4 small">Комментариев пока нет. Будь первым!</div>';
+            list.innerHTML = '<div class="text-center opacity-40 py-4 small">РљРѕРјРјРµРЅС‚Р°СЂРёРµРІ РїРѕРєР° РЅРµС‚. Р‘СѓРґСЊ РїРµСЂРІС‹Рј!</div>';
         } else {
             list.innerHTML = comments.map(c => `
                 <div class="drawer-comment">
@@ -3356,7 +3356,7 @@ new Chart(document.getElementById('postsChart'), {
     'users.html': """
 {% extends "base.html" %} 
 {% block content %} 
-<h3 class="mb-4">Поиск людей</h3> 
+<h3 class="mb-4">РџРѕРёСЃРє Р»СЋРґРµР№</h3> 
 <div class="row"> 
 {% for u in users %} 
 {% if u.id != current_user.id and u.username != 'admin' %} 
@@ -3375,10 +3375,10 @@ new Chart(document.getElementById('postsChart'), {
                     {{ u.username }} 
                     {% if u.is_verified %}<i class="bi bi-patch-check-fill verified-icon"></i>{% endif %}
                 </h5>
-                <small class="text-muted">{{ u.followers.count() }} вайберов</small>
+                <small class="text-muted">{{ u.followers.count() }} РІР°Р№Р±РµСЂРѕРІ</small>
             </div>
         </div>
-        <a href="{{ url_for('profile', username=u.username) }}" class="btn btn-sm btn-outline-primary rounded-pill w-100">Профиль</a>
+        <a href="{{ url_for('profile', username=u.username) }}" class="btn btn-sm btn-outline-primary rounded-pill w-100">РџСЂРѕС„РёР»СЊ</a>
     </div>
 </div> 
 {% endif %} 
@@ -3421,30 +3421,30 @@ new Chart(document.getElementById('postsChart'), {
 </style>
 
 <div class="d-flex justify-content-between align-items-center mb-4">
-    <h3 class="fw-bold mb-0"><i class="bi bi-play-btn-fill me-2"></i>Мои Flux</h3>
+    <h3 class="fw-bold mb-0"><i class="bi bi-play-btn-fill me-2"></i>РњРѕРё Flux</h3>
     <a href="{{ url_for('flux_feed') }}" class="btn btn-primary rounded-pill px-4">
-        <i class="bi bi-play-circle me-1"></i> Смотреть ленту
+        <i class="bi bi-play-circle me-1"></i> РЎРјРѕС‚СЂРµС‚СЊ Р»РµРЅС‚Сѓ
     </a>
 </div>
 
-<!-- Аналитика -->
+<!-- РђРЅР°Р»РёС‚РёРєР° -->
 <div class="row g-3 mb-4">
     <div class="col-4">
         <div class="flux-stat-card">
             <h2>{{ stats.total_videos }}</h2>
-            <p><i class="bi bi-play-fill"></i> Видео</p>
+            <p><i class="bi bi-play-fill"></i> Р’РёРґРµРѕ</p>
         </div>
     </div>
     <div class="col-4">
         <div class="flux-stat-card">
             <h2>{{ stats.total_views }}</h2>
-            <p><i class="bi bi-eye-fill"></i> Просмотров</p>
+            <p><i class="bi bi-eye-fill"></i> РџСЂРѕСЃРјРѕС‚СЂРѕРІ</p>
         </div>
     </div>
     <div class="col-4">
         <div class="flux-stat-card">
             <h2>{{ stats.total_likes }}</h2>
-            <p><i class="bi bi-heart-fill"></i> Лайков</p>
+            <p><i class="bi bi-heart-fill"></i> Р›Р°Р№РєРѕРІ</p>
         </div>
     </div>
 </div>
@@ -3467,8 +3467,8 @@ new Chart(document.getElementById('postsChart'), {
             <div class="small opacity-50">{{ video.timestamp|time_ago }}</div>
         </div>
         <form method="POST" action="{{ url_for('delete_flux', video_id=video.id) }}"
-              onsubmit="return confirm('Удалить видео?')">
-            <button type="submit" class="flux-delete-btn" title="Удалить">
+              onsubmit="return confirm('РЈРґР°Р»РёС‚СЊ РІРёРґРµРѕ?')">
+            <button type="submit" class="flux-delete-btn" title="РЈРґР°Р»РёС‚СЊ">
                 <i class="bi bi-trash-fill"></i>
             </button>
         </form>
@@ -3478,9 +3478,9 @@ new Chart(document.getElementById('postsChart'), {
 {% else %}
 <div class="text-center py-5">
     <i class="bi bi-camera-video" style="font-size:4rem; opacity:0.3;"></i>
-    <h5 class="mt-3 opacity-50">Ты ещё не выкладывал видео</h5>
+    <h5 class="mt-3 opacity-50">РўС‹ РµС‰С‘ РЅРµ РІС‹РєР»Р°РґС‹РІР°Р» РІРёРґРµРѕ</h5>
     <a href="{{ url_for('flux_feed') }}" class="btn btn-primary rounded-pill mt-3 px-5">
-        Выложить первое <i class="bi bi-plus-lg"></i>
+        Р’С‹Р»РѕР¶РёС‚СЊ РїРµСЂРІРѕРµ <i class="bi bi-plus-lg"></i>
     </a>
 </div>
 {% endif %}
@@ -3541,7 +3541,7 @@ new Chart(document.getElementById('postsChart'), {
         <span class="fw-bold"><i class="bi bi-robot me-1" style="color:#7c3aed"></i>FontanAI</span>
       </div>
       <button class="btn btn-primary btn-sm w-100 rounded-pill" onclick="newChat()">
-        <i class="bi bi-plus-lg me-1"></i>Новый чат
+        <i class="bi bi-plus-lg me-1"></i>РќРѕРІС‹Р№ С‡Р°С‚
       </button>
     </div>
     <div class="ai-chat-list" id="chatList">
@@ -3564,7 +3564,7 @@ new Chart(document.getElementById('postsChart'), {
       <div class="ai-avatar bot"><i class="bi bi-robot"></i></div>
       <div class="flex-1">
         <span class="fw-semibold" id="chatTitle">{% if chats %}{{ chats[0].title }}{% else %}FontanAI{% endif %}</span>
-        <div class="text-muted small" style="font-size:.75rem;">Powered by Groq · Llama3-70B</div>
+        <div class="text-muted small" style="font-size:.75rem;">Powered by Groq В· Llama3-70B</div>
       </div>
       <div class="ms-auto d-flex gap-2">
         <button class="btn btn-sm btn-outline-danger rounded-pill" id="deleteChatBtn" onclick="deleteCurrentChat()" style="display:none;">
@@ -3577,8 +3577,8 @@ new Chart(document.getElementById('postsChart'), {
       <div class="ai-empty" id="aiEmpty">
         <i class="bi bi-robot" style="font-size:3.5rem;opacity:.3;"></i>
         <div class="text-center">
-          <div class="fw-semibold">FontanAI готов к работе</div>
-          <div class="small opacity-75">Задай вопрос или создай новый чат</div>
+          <div class="fw-semibold">FontanAI РіРѕС‚РѕРІ Рє СЂР°Р±РѕС‚Рµ</div>
+          <div class="small opacity-75">Р—Р°РґР°Р№ РІРѕРїСЂРѕСЃ РёР»Рё СЃРѕР·РґР°Р№ РЅРѕРІС‹Р№ С‡Р°С‚</div>
         </div>
       </div>
     </div>
@@ -3590,14 +3590,14 @@ new Chart(document.getElementById('postsChart'), {
         <button class="btn btn-sm btn-link text-danger p-0" onclick="clearFile()"><i class="bi bi-x"></i></button>
       </div>
       <div class="ai-input-row">
-        <label class="ai-file-label" for="aiFileInput" title="Прикрепить файл">
+        <label class="ai-file-label" for="aiFileInput" title="РџСЂРёРєСЂРµРїРёС‚СЊ С„Р°Р№Р»">
           <i class="bi bi-paperclip fs-5"></i>
         </label>
         <input type="file" id="aiFileInput" style="display:none;" accept="image/*,.pdf,.txt,.doc,.docx" onchange="handleFileSelect(this)">
-        <textarea id="aiInput" placeholder="Напиши сообщение…" rows="1"
-                  onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage();}"
+        <textarea id="aiInput" placeholder="РќР°РїРёС€Рё СЃРѕРѕР±С‰РµРЅРёРµвЂ¦" rows="1"
+                  onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();aiSendMessage();}"
                   oninput="this.style.height='auto';this.style.height=this.scrollHeight+'px'"></textarea>
-        <button class="ai-send-btn" id="aiSendBtn" onclick="sendMessage()">
+        <button class="ai-send-btn" id="aiSendBtn" onclick="aiSendMessage()">
           <i class="bi bi-send-fill"></i>
         </button>
       </div>
@@ -3615,17 +3615,17 @@ async function newChat() {
   const res = await fetch('/api/ai/new_chat', {method:'POST'});
   const data = await res.json();
   currentChatId = data.chat_id;
-  // Добавляем в список
+  // Р”РѕР±Р°РІР»СЏРµРј РІ СЃРїРёСЃРѕРє
   const list = document.getElementById('chatList');
   const item = document.createElement('div');
   item.className = 'ai-chat-item active';
   item.dataset.chatId = data.chat_id;
   item.onclick = function(){ loadChat(data.chat_id, this); };
-  item.innerHTML = `<i class="bi bi-chat-dots text-muted" style="font-size:.9rem;flex-shrink:0;"></i><span class="chat-title">${data.title}</span><span class="chat-time">только что</span>`;
+  item.innerHTML = `<i class="bi bi-chat-dots text-muted" style="font-size:.9rem;flex-shrink:0;"></i><span class="chat-title">${data.title}</span><span class="chat-time">С‚РѕР»СЊРєРѕ С‡С‚Рѕ</span>`;
   list.querySelectorAll('.ai-chat-item').forEach(el => el.classList.remove('active'));
   list.prepend(item);
-  document.getElementById('aiMessages').innerHTML = '<div class="ai-empty" id="aiEmpty"><i class="bi bi-robot" style="font-size:3.5rem;opacity:.3;"></i><div class="text-center"><div class="fw-semibold">Новый чат</div><div class="small opacity-75">Задай вопрос FontanAI</div></div></div>';
-  document.getElementById('chatTitle').textContent = 'Новый чат';
+  document.getElementById('aiMessages').innerHTML = '<div class="ai-empty" id="aiEmpty"><i class="bi bi-robot" style="font-size:3.5rem;opacity:.3;"></i><div class="text-center"><div class="fw-semibold">РќРѕРІС‹Р№ С‡Р°С‚</div><div class="small opacity-75">Р—Р°РґР°Р№ РІРѕРїСЂРѕСЃ FontanAI</div></div></div>';
+  document.getElementById('chatTitle').textContent = 'РќРѕРІС‹Р№ С‡Р°С‚';
   document.getElementById('deleteChatBtn').style.display = 'inline-block';
 }
 
@@ -3640,7 +3640,7 @@ async function loadChat(chatId, el) {
   const box = document.getElementById('aiMessages');
   box.innerHTML = '';
   if(!data.messages.length){
-    box.innerHTML = '<div class="ai-empty"><i class="bi bi-robot" style="font-size:3.5rem;opacity:.3;"></i><div class="text-center"><div class="fw-semibold">Чат пустой</div><div class="small opacity-75">Напиши первое сообщение!</div></div></div>';
+    box.innerHTML = '<div class="ai-empty"><i class="bi bi-robot" style="font-size:3.5rem;opacity:.3;"></i><div class="text-center"><div class="fw-semibold">Р§Р°С‚ РїСѓСЃС‚РѕР№</div><div class="small opacity-75">РќР°РїРёС€Рё РїРµСЂРІРѕРµ СЃРѕРѕР±С‰РµРЅРёРµ!</div></div></div>';
     return;
   }
   data.messages.forEach(m => appendMessage(m));
@@ -3667,7 +3667,7 @@ function appendMessage(m) {
     if(m.file_type === 'image'){
       html += `<div class="ai-msg-file"><img src="${m.file_url}" onclick="window.open('${m.file_url}','_blank')"></div>`;
     } else {
-      html += `<div class="ai-msg-file"><a href="${m.file_url}" target="_blank"><i class="bi bi-paperclip me-1"></i>Файл</a></div>`;
+      html += `<div class="ai-msg-file"><a href="${m.file_url}" target="_blank"><i class="bi bi-paperclip me-1"></i>Р¤Р°Р№Р»</a></div>`;
     }
   }
   html += `<div style="font-size:.7rem;opacity:.5;margin-top:4px;text-align:${m.role==='user'?'right':'left'}">${m.timestamp}</div>`;
@@ -3710,11 +3710,19 @@ function clearFile() {
   document.getElementById('filePreview').style.display = 'none';
 }
 
-async function sendMessage() {
-  if(isWaiting || !currentChatId) return;
+async function aiSendMessage() {
+  if(isWaiting) return;
   const input = document.getElementById('aiInput');
   const text = input.value.trim();
   if(!text && !selectedFile) return;
+  if(!currentChatId) {
+    try {
+      await newChat();
+    } catch (e) {
+      alert('Не удалось создать чат');
+      return;
+    }
+  }
 
   isWaiting = true;
   document.getElementById('aiSendBtn').disabled = true;
@@ -3735,7 +3743,7 @@ async function sendMessage() {
     removeTyping();
     if(res.status === 429) {
       const data = await res.json();
-      alert(data.error || 'Подожди немного!');
+      alert(data.error || 'РџРѕРґРѕР¶РґРё РЅРµРјРЅРѕРіРѕ!');
       isWaiting = false;
       document.getElementById('aiSendBtn').disabled = false;
       return;
@@ -3745,20 +3753,20 @@ async function sendMessage() {
     appendMessage(data.user_msg);
     if(data.ai_msg) appendMessage(data.ai_msg);
     else if(data.admin_mode) {
-      // В режиме ожидания ответа от админа
+      // Р’ СЂРµР¶РёРјРµ РѕР¶РёРґР°РЅРёСЏ РѕС‚РІРµС‚Р° РѕС‚ Р°РґРјРёРЅР°
       const box = document.getElementById('aiMessages');
       const notice = document.createElement('div');
       notice.className = 'text-center text-muted small my-2';
-      notice.textContent = '⏳ Ожидаем ответа оператора…';
+      notice.textContent = 'вЏі РћР¶РёРґР°РµРј РѕС‚РІРµС‚Р° РѕРїРµСЂР°С‚РѕСЂР°вЂ¦';
       box.appendChild(notice);
       box.scrollTop = box.scrollHeight;
     }
-    // Обновить заголовок в сайдбаре
+    // РћР±РЅРѕРІРёС‚СЊ Р·Р°РіРѕР»РѕРІРѕРє РІ СЃР°Р№РґР±Р°СЂРµ
     const item = document.querySelector(`.ai-chat-item[data-chat-id="${currentChatId}"] .chat-title`);
     if(item) item.textContent = document.getElementById('chatTitle').textContent;
   } catch(e) {
     removeTyping();
-    appendMessage({role:'assistant',content:'⏳ Попробуйте позже — нейросеть не отвечает.',timestamp:new Date().toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'})});
+    appendMessage({role:'assistant',content:'вЏі РџРѕРїСЂРѕР±СѓР№С‚Рµ РїРѕР·Р¶Рµ вЂ” РЅРµР№СЂРѕСЃРµС‚СЊ РЅРµ РѕС‚РІРµС‡Р°РµС‚.',timestamp:new Date().toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'})});
   }
   isWaiting = false;
   document.getElementById('aiSendBtn').disabled = false;
@@ -3767,16 +3775,16 @@ async function sendMessage() {
 
 async function deleteCurrentChat() {
   if(!currentChatId) return;
-  if(!confirm('Удалить этот чат?')) return;
+  if(!confirm('РЈРґР°Р»РёС‚СЊ СЌС‚РѕС‚ С‡Р°С‚?')) return;
   await fetch(`/api/ai/delete_chat/${currentChatId}`, {method:'POST'});
   const item = document.querySelector(`.ai-chat-item[data-chat-id="${currentChatId}"]`);
   if(item) item.remove();
   currentChatId = null;
-  document.getElementById('aiMessages').innerHTML = '<div class="ai-empty"><i class="bi bi-robot" style="font-size:3.5rem;opacity:.3;"></i><div class="text-center"><div class="fw-semibold">Чат удалён</div></div></div>';
+  document.getElementById('aiMessages').innerHTML = '<div class="ai-empty"><i class="bi bi-robot" style="font-size:3.5rem;opacity:.3;"></i><div class="text-center"><div class="fw-semibold">Р§Р°С‚ СѓРґР°Р»С‘РЅ</div></div></div>';
   document.getElementById('deleteChatBtn').style.display = 'none';
 }
 
-// Если есть Socket.IO — слушаем ответы от админа
+// Р•СЃР»Рё РµСЃС‚СЊ Socket.IO вЂ” СЃР»СѓС€Р°РµРј РѕС‚РІРµС‚С‹ РѕС‚ Р°РґРјРёРЅР°
 if(typeof io !== 'undefined') {
   const sock = io();
   sock.on('connect', () => { if(currentChatId) sock.emit('join_ai_chat', {chat_id: currentChatId}); });
@@ -3811,8 +3819,8 @@ if(typeof io !== 'undefined') {
 </style>
 
 <div class="d-flex align-items-center justify-content-between mb-4">
-  <h3 class="fw-bold mb-0"><i class="bi bi-robot me-2" style="color:#7c3aed"></i>FontanAI — Все чаты</h3>
-  <a href="{{ url_for('admin_dashboard') }}" class="btn btn-outline-secondary rounded-pill"><i class="bi bi-arrow-left me-1"></i>Назад</a>
+  <h3 class="fw-bold mb-0"><i class="bi bi-robot me-2" style="color:#7c3aed"></i>FontanAI вЂ” Р’СЃРµ С‡Р°С‚С‹</h3>
+  <a href="{{ url_for('admin_dashboard') }}" class="btn btn-outline-secondary rounded-pill"><i class="bi bi-arrow-left me-1"></i>РќР°Р·Р°Рґ</a>
 </div>
 
 <div class="ai-admin-chat-list">
@@ -3825,17 +3833,17 @@ if(typeof io !== 'undefined') {
     </div>
     <div class="ms-auto d-flex gap-2 align-items-center">
       <span class="mode-badge {% if chat.is_admin_mode %}mode-admin{% else %}mode-ai{% endif %}" id="modeBadge{{ chat.id }}">
-        {% if chat.is_admin_mode %}👤 Ручной{% else %}🤖 ИИ{% endif %}
+        {% if chat.is_admin_mode %}рџ‘¤ Р СѓС‡РЅРѕР№{% else %}рџ¤– РР{% endif %}
       </span>
       <button class="btn btn-sm btn-outline-secondary rounded-pill" onclick="toggleMode({{ chat.id }})">
-        Переключить режим
+        РџРµСЂРµРєР»СЋС‡РёС‚СЊ СЂРµР¶РёРј
       </button>
     </div>
   </div>
   <div class="ai-chat-msgs" id="msgs{{ chat.id }}">
     {% for m in chat.messages %}
     <div class="ai-admin-msg {{ m.role }}">
-      <div style="font-size:.7rem;opacity:.6;margin-bottom:2px;">{{ 'Пользователь' if m.role == 'user' else 'ИИ / Админ' }} · {{ m.timestamp|time_ago }}</div>
+      <div style="font-size:.7rem;opacity:.6;margin-bottom:2px;">{{ 'РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ' if m.role == 'user' else 'РР / РђРґРјРёРЅ' }} В· {{ m.timestamp|time_ago }}</div>
       {% if m.content %}{{ m.content }}{% endif %}
       {% if m.file_url and m.file_type == 'image' %}<br><img src="{{ m.file_url }}" style="max-width:140px;border-radius:8px;margin-top:4px;">{% endif %}
     </div>
@@ -3843,12 +3851,12 @@ if(typeof io !== 'undefined') {
   </div>
   {% if chat.is_admin_mode %}
   <div class="ai-reply-form" id="replyForm{{ chat.id }}">
-    <input type="text" placeholder="Ответить от имени ИИ…" id="replyInput{{ chat.id }}" onkeydown="if(event.key==='Enter') adminReply({{ chat.id }})">
+    <input type="text" placeholder="РћС‚РІРµС‚РёС‚СЊ РѕС‚ РёРјРµРЅРё РРвЂ¦" id="replyInput{{ chat.id }}" onkeydown="if(event.key==='Enter') adminReply({{ chat.id }})">
     <button class="btn btn-primary rounded-pill px-3" onclick="adminReply({{ chat.id }})"><i class="bi bi-send-fill"></i></button>
   </div>
   {% else %}
   <div class="ai-reply-form" id="replyForm{{ chat.id }}" style="display:none;">
-    <input type="text" placeholder="Ответить от имени ИИ…" id="replyInput{{ chat.id }}" onkeydown="if(event.key==='Enter') adminReply({{ chat.id }})">
+    <input type="text" placeholder="РћС‚РІРµС‚РёС‚СЊ РѕС‚ РёРјРµРЅРё РРвЂ¦" id="replyInput{{ chat.id }}" onkeydown="if(event.key==='Enter') adminReply({{ chat.id }})">
     <button class="btn btn-primary rounded-pill px-3" onclick="adminReply({{ chat.id }})"><i class="bi bi-send-fill"></i></button>
   </div>
   {% endif %}
@@ -3856,7 +3864,7 @@ if(typeof io !== 'undefined') {
 {% else %}
 <div class="text-center text-muted py-5">
   <i class="bi bi-robot" style="font-size:3rem;opacity:.3;"></i>
-  <div class="mt-3">Чатов ещё нет</div>
+  <div class="mt-3">Р§Р°С‚РѕРІ РµС‰С‘ РЅРµС‚</div>
 </div>
 {% endfor %}
 </div>
@@ -3868,11 +3876,11 @@ async function toggleMode(chatId) {
   const badge = document.getElementById('modeBadge' + chatId);
   const form = document.getElementById('replyForm' + chatId);
   if(data.is_admin_mode) {
-    badge.textContent = '👤 Ручной';
+    badge.textContent = 'рџ‘¤ Р СѓС‡РЅРѕР№';
     badge.className = 'mode-badge mode-admin';
     form.style.display = 'flex';
   } else {
-    badge.textContent = '🤖 ИИ';
+    badge.textContent = 'рџ¤– РР';
     badge.className = 'mode-badge mode-ai';
     form.style.display = 'none';
   }
@@ -3890,13 +3898,13 @@ async function adminReply(chatId) {
     const msgs = document.getElementById('msgs' + chatId);
     const div = document.createElement('div');
     div.className = 'ai-admin-msg assistant';
-    div.innerHTML = `<div style="font-size:.7rem;opacity:.6;margin-bottom:2px;">ИИ / Админ · только что</div>${text}`;
+    div.innerHTML = `<div style="font-size:.7rem;opacity:.6;margin-bottom:2px;">РР / РђРґРјРёРЅ В· С‚РѕР»СЊРєРѕ С‡С‚Рѕ</div>${text}`;
     msgs.appendChild(div);
     msgs.scrollTop = msgs.scrollHeight;
   }
 }
 
-// Прокрутить все чаты вниз
+// РџСЂРѕРєСЂСѓС‚РёС‚СЊ РІСЃРµ С‡Р°С‚С‹ РІРЅРёР·
 document.querySelectorAll('.ai-chat-msgs').forEach(el => el.scrollTop = el.scrollHeight);
 </script>
 {% endblock %}
@@ -3911,7 +3919,7 @@ app.jinja_loader = jinja2.DictLoader(templates)
 @app.route('/')
 @login_required
 def index():
-    # Умная лента: ранжирование по интересу, а не только по новизне
+    # РЈРјРЅР°СЏ Р»РµРЅС‚Р°: СЂР°РЅР¶РёСЂРѕРІР°РЅРёРµ РїРѕ РёРЅС‚РµСЂРµСЃСѓ, Р° РЅРµ С‚РѕР»СЊРєРѕ РїРѕ РЅРѕРІРёР·РЅРµ
     following_ids = [f.following_id for f in current_user.following.all()]
     base_posts = Post.query.filter_by(is_moderated=True).order_by(Post.timestamp.desc()).limit(200).all()
     now = datetime.utcnow()
@@ -3940,7 +3948,7 @@ def index():
 @app.route('/api/load_posts')
 @login_required
 def load_posts_api():
-    """API для ленивой подгрузки постов"""
+    """API РґР»СЏ Р»РµРЅРёРІРѕР№ РїРѕРґРіСЂСѓР·РєРё РїРѕСЃС‚РѕРІ"""
     page = request.args.get('page', 1, type=int)
     per_page = 10
     
@@ -3962,7 +3970,7 @@ def load_posts_api():
     
     posts_html = []
     for post in items:
-        # Отмечаем просмотр
+        # РћС‚РјРµС‡Р°РµРј РїСЂРѕСЃРјРѕС‚СЂ
         view = PostView.query.filter_by(user_id=current_user.id, post_id=post.id).first()
         if not view:
             db.session.add(PostView(user_id=current_user.id, post_id=post.id))
@@ -3991,7 +3999,7 @@ def profile(username):
             else: status = 'pending_received'
     return render_template('profile.html', user=user, posts=posts, friendship_status=status, is_online=is_online)
 
-# --- ВАЙБЕРЫ (ПОДПИСКИ) ---
+# --- Р’РђР™Р‘Р•Р Р« (РџРћР”РџРРЎРљР) ---
 @app.route('/follow/<int:user_id>')
 @login_required
 def follow_user(user_id):
@@ -4002,8 +4010,8 @@ def follow_user(user_id):
     if not existing:
         db.session.add(Follow(follower_id=current_user.id, following_id=user_id))
         db.session.commit()
-        create_notification(user_id, 'follow', f'{current_user.username} подписался на вас', link=url_for('profile', username=current_user.username), from_user_id=current_user.id)
-        flash("Вы вайбнулись! 💜", "success")
+        create_notification(user_id, 'follow', f'{current_user.username} РїРѕРґРїРёСЃР°Р»СЃСЏ РЅР° РІР°СЃ', link=url_for('profile', username=current_user.username), from_user_id=current_user.id)
+        flash("Р’С‹ РІР°Р№Р±РЅСѓР»РёСЃСЊ! рџ’њ", "success")
     
     return redirect(request.referrer or url_for('index'))
 
@@ -4014,19 +4022,19 @@ def unfollow_user(user_id):
     if follow:
         db.session.delete(follow)
         db.session.commit()
-        flash("Вы отписались", "info")
+        flash("Р’С‹ РѕС‚РїРёСЃР°Р»РёСЃСЊ", "info")
     
     return redirect(request.referrer or url_for('index'))
 
 @app.route('/my_vibers')
 @login_required
 def my_vibers():
-    """Страница с моими подписчиками (вайберами)"""
+    """РЎС‚СЂР°РЅРёС†Р° СЃ РјРѕРёРјРё РїРѕРґРїРёСЃС‡РёРєР°РјРё (РІР°Р№Р±РµСЂР°РјРё)"""
     follower_ids = [f.follower_id for f in current_user.followers.all()]
     followers = User.query.filter(User.id.in_(follower_ids)).all()
     return render_template('my_vibers.html', followers=followers)
 
-# --- ПЕРЕКЛЮЧЕНИЕ ТЕМЫ ---
+# --- РџР•Р Р•РљР›Р®Р§Р•РќРР• РўР•РњР« ---
 @app.route('/toggle_theme', methods=['POST'])
 @login_required
 def toggle_theme():
@@ -4034,23 +4042,23 @@ def toggle_theme():
     db.session.commit()
     return jsonify({'theme': current_user.theme})
 
-# --- ГОЛОСОВАНИЕ В ОПРОСАХ ---
+# --- Р“РћР›РћРЎРћР’РђРќРР• Р’ РћРџР РћРЎРђРҐ ---
 @app.route('/vote_poll/<int:poll_id>/<int:option_index>', methods=['POST'])
 @login_required
 def vote_poll(poll_id, option_index):
     poll = db.session.get(Poll, poll_id)
     if not poll:
-        return jsonify({'error': 'Опрос не найден'}), 404
+        return jsonify({'error': 'РћРїСЂРѕСЃ РЅРµ РЅР°Р№РґРµРЅ'}), 404
     
-    # Проверяем, голосовал ли уже
+    # РџСЂРѕРІРµСЂСЏРµРј, РіРѕР»РѕСЃРѕРІР°Р» Р»Рё СѓР¶Рµ
     existing_vote = PollVote.query.filter_by(poll_id=poll_id, user_id=current_user.id).first()
     if existing_vote:
-        return jsonify({'error': 'Вы уже голосовали'}), 400
+        return jsonify({'error': 'Р’С‹ СѓР¶Рµ РіРѕР»РѕСЃРѕРІР°Р»Рё'}), 400
     
-    # Добавляем голос
+    # Р”РѕР±Р°РІР»СЏРµРј РіРѕР»РѕСЃ
     db.session.add(PollVote(poll_id=poll_id, user_id=current_user.id, option_index=option_index))
     
-    # Обновляем счётчик
+    # РћР±РЅРѕРІР»СЏРµРј СЃС‡С‘С‚С‡РёРє
     votes = json.loads(poll.votes) if poll.votes else {}
     votes[str(option_index)] = votes.get(str(option_index), 0) + 1
     poll.votes = json.dumps(votes)
@@ -4058,7 +4066,7 @@ def vote_poll(poll_id, option_index):
     db.session.commit()
     return jsonify({'success': True})
 
-# --- АДМИНСКИЕ ФУНКЦИИ ---
+# --- РђР”РњРРќРЎРљРР• Р¤РЈРќРљР¦РР ---
 @app.route('/admin/ban/<int:user_id>')
 @login_required
 def admin_ban_user(user_id):
@@ -4067,7 +4075,7 @@ def admin_ban_user(user_id):
     if user and user.username != 'admin':
         user.is_banned = not user.is_banned
         db.session.commit()
-        flash(f"Пользователь {'забанен' if user.is_banned else 'разбанен'}", "warning")
+        flash(f"РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ {'Р·Р°Р±Р°РЅРµРЅ' if user.is_banned else 'СЂР°Р·Р±Р°РЅРµРЅ'}", "warning")
     return redirect(url_for('profile', username=user.username))
 
 @app.route('/admin/verify/<int:user_id>')
@@ -4078,10 +4086,10 @@ def admin_verify_user(user_id):
     if user:
         user.is_verified = not user.is_verified
         db.session.commit()
-        flash("Статус верификации изменен", "success")
+        flash("РЎС‚Р°С‚СѓСЃ РІРµСЂРёС„РёРєР°С†РёРё РёР·РјРµРЅРµРЅ", "success")
     return redirect(url_for('profile', username=user.username))
 
-# --- ДРУЗЬЯ ---
+# --- Р”Р РЈР—Р¬РЇ ---
 @app.route('/add_friend/<int:user_id>')
 @login_required
 def add_friend(user_id):
@@ -4093,7 +4101,7 @@ def add_friend(user_id):
     if not existing:
         db.session.add(Friendship(sender_id=current_user.id, receiver_id=user_id, status='pending'))
         db.session.commit()
-        flash("Запрос отправлен", "success")
+        flash("Р—Р°РїСЂРѕСЃ РѕС‚РїСЂР°РІР»РµРЅ", "success")
     return redirect(request.referrer)
 
 @app.route('/accept_friend/<int:user_id>')
@@ -4103,7 +4111,7 @@ def accept_friend(user_id):
     if friendship:
         friendship.status = 'accepted'
         db.session.commit()
-        flash("Теперь вы друзья!", "success")
+        flash("РўРµРїРµСЂСЊ РІС‹ РґСЂСѓР·СЊСЏ!", "success")
     return redirect(request.referrer)
 
 @app.route('/remove_friend/<int:user_id>')
@@ -4116,7 +4124,7 @@ def remove_friend(user_id):
     if friendship:
         db.session.delete(friendship)
         db.session.commit()
-        flash("Удалено", "info")
+        flash("РЈРґР°Р»РµРЅРѕ", "info")
     return redirect(request.referrer)
 
 @app.route('/friends/requests')
@@ -4129,7 +4137,7 @@ def friends_requests():
         reqs.append({'user': sender})
     return render_template('friends.html', requests=reqs)
 
-# --- МЕССЕНДЖЕР ---
+# --- РњР•РЎРЎР•РќР”Р–Р•Р  ---
 @app.route('/messenger')
 @login_required
 def messenger():
@@ -4319,7 +4327,7 @@ def delete_message_api():
     socketio.emit('message', {'room_id': room}, to=room)
     return jsonify({'ok': True})
 
-# --- ПОСТЫ И КОММЕНТАРИИ ---
+# --- РџРћРЎРўР« Р РљРћРњРњР•РќРўРђР РР ---
 @app.route('/add_voice_comment/<int:post_id>', methods=['POST'])
 @login_required
 def add_voice_comment(post_id):
@@ -4369,7 +4377,7 @@ def update_settings():
         current_user.color_theme = color_theme
     if username and username != current_user.username:
         if not User.query.filter_by(username=username).first(): current_user.username = username
-        else: flash("Ник занят")
+        else: flash("РќРёРє Р·Р°РЅСЏС‚")
     db.session.commit()
     return redirect(url_for('profile', username=current_user.username))
 
@@ -4395,7 +4403,7 @@ def admin_dashboard():
     total_posts = Post.query.count()
     total_flux = FluxVideo.query.count()
     
-    # последние 14 дней
+    # РїРѕСЃР»РµРґРЅРёРµ 14 РґРЅРµР№
     labels = []
     users_data = []
     posts_data = []
@@ -4423,13 +4431,13 @@ def admin_broadcast():
             for u in users:
                 create_notification(u.id, 'system', msg, link=url_for('index'), from_user_id=current_user.id)
             db.session.commit()
-            flash(f"Рассылка отправлена {len(users)} пользователям!", "success")
+            flash(f"Р Р°СЃСЃС‹Р»РєР° РѕС‚РїСЂР°РІР»РµРЅР° {len(users)} РїРѕР»СЊР·РѕРІР°С‚РµР»СЏРј!", "success")
         except Exception as e:
             db.session.rollback()
             print(f"[broadcast ERROR] {e}")
-            flash("Ошибка рассылки", "danger")
+            flash("РћС€РёР±РєР° СЂР°СЃСЃС‹Р»РєРё", "danger")
     else:
-        flash("Сообщение не может быть пустым", "warning")
+        flash("РЎРѕРѕР±С‰РµРЅРёРµ РЅРµ РјРѕР¶РµС‚ Р±С‹С‚СЊ РїСѓСЃС‚С‹Рј", "warning")
     return redirect(url_for('admin_dashboard'))
 
 @app.route('/admin/flux')
@@ -4450,7 +4458,7 @@ def admin_delete_flux(video_id):
     FluxComment.query.filter_by(video_id=video_id).delete()
     db.session.delete(video)
     db.session.commit()
-    flash("Видео удалено администратором.", "success")
+    flash("Р’РёРґРµРѕ СѓРґР°Р»РµРЅРѕ Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂРѕРј.", "success")
     return redirect(url_for('admin_flux_list'))
 
 @app.route('/admin/reports')
@@ -4465,11 +4473,11 @@ def admin_reports():
 def report():
     post_id = request.args.get('post_id')
     user_id = request.args.get('user_id')
-    reason = request.args.get('reason', 'Жалоба')
+    reason = request.args.get('reason', 'Р–Р°Р»РѕР±Р°')
     r = Report(reporter_id=current_user.id, post_id=post_id, target_user_id=user_id, reason=reason)
     db.session.add(r)
     db.session.commit()
-    flash("Жалоба отправлена", "info")
+    flash("Р–Р°Р»РѕР±Р° РѕС‚РїСЂР°РІР»РµРЅР°", "info")
     return redirect(request.referrer or url_for('index'))
 
 @app.route('/sessions')
@@ -4549,13 +4557,13 @@ def create_post():
     content = normalize_text(request.form.get('content'))
     client_token = request.form.get('client_token', '').strip()
     if not consume_idempotency_token('create_post', client_token):
-        flash("Пост уже был отправлен. Дубликат остановлен.", "warning")
+        flash("РџРѕСЃС‚ СѓР¶Рµ Р±С‹Р» РѕС‚РїСЂР°РІР»РµРЅ. Р”СѓР±Р»РёРєР°С‚ РѕСЃС‚Р°РЅРѕРІР»РµРЅ.", "warning")
         return redirect(url_for('index'))
     files = request.files.getlist('media')
     image_url, video_url = None, None
     media_items = []
     
-    # AI модерация контента
+    # AI РјРѕРґРµСЂР°С†РёСЏ РєРѕРЅС‚РµРЅС‚Р°
     is_ok, reason = moderate_content(content)
     
     if files:
@@ -4569,13 +4577,13 @@ def create_post():
                     url = upload_to_cloud(file, resource_type="image")
                     if url: media_items.append(('image', url))
         if media_items:
-            # Для обратной совместимости (первый файл)
+            # Р”Р»СЏ РѕР±СЂР°С‚РЅРѕР№ СЃРѕРІРјРµСЃС‚РёРјРѕСЃС‚Рё (РїРµСЂРІС‹Р№ С„Р°Р№Р»)
             if media_items[0][0] == 'video':
                 video_url = media_items[0][1]
             else:
                 image_url = media_items[0][1]
     
-    # Создание опроса
+    # РЎРѕР·РґР°РЅРёРµ РѕРїСЂРѕСЃР°
     poll_question = request.form.get('poll_question')
     poll_data = None
     
@@ -4592,14 +4600,14 @@ def create_post():
                 'options': options
             }
             
-    # Со-автор
+    # РЎРѕ-Р°РІС‚РѕСЂ
     co_author = request.form.get('co_author', '').replace('@','').strip()
     co_author_user = User.query.filter_by(username=co_author).first() if co_author else None
     comments_enabled = not bool(request.form.get('disable_comments'))
     duplicate_signature = f'{content}|{len(media_items)}|{bool(poll_data)}|{co_author_user.id if co_author_user else 0}|{comments_enabled}'
 
     if recent_duplicate_signature('create_post_sig', duplicate_signature):
-        flash("Похоже, это повторный клик по посту. Второй пост не создан.", "warning")
+        flash("РџРѕС…РѕР¶Рµ, СЌС‚Рѕ РїРѕРІС‚РѕСЂРЅС‹Р№ РєР»РёРє РїРѕ РїРѕСЃС‚Сѓ. Р’С‚РѕСЂРѕР№ РїРѕСЃС‚ РЅРµ СЃРѕР·РґР°РЅ.", "warning")
         return redirect(url_for('index'))
 
     if content or image_url or video_url or poll_data or media_items:
@@ -4632,17 +4640,17 @@ def create_post():
         db.session.commit()
         
         if not is_ok:
-            flash(f"⚠️ Ваш пост заблокирован модерацией: {reason}", "warning")
+            flash(f"вљ пёЏ Р’Р°С€ РїРѕСЃС‚ Р·Р°Р±Р»РѕРєРёСЂРѕРІР°РЅ РјРѕРґРµСЂР°С†РёРµР№: {reason}", "warning")
 
-        # Упоминания
+        # РЈРїРѕРјРёРЅР°РЅРёСЏ
         if content:
             mentions = set(re.findall(r'@([A-Za-z0-9_\\.]+)', content))
             for uname in mentions:
                 u = User.query.filter_by(username=uname).first()
                 if u:
-                    create_notification(u.id, 'mention', f'Вас упомянули в посте {current_user.username}', link=url_for('post_view', post_id=post.id), from_user_id=current_user.id)
+                    create_notification(u.id, 'mention', f'Р’Р°СЃ СѓРїРѕРјСЏРЅСѓР»Рё РІ РїРѕСЃС‚Рµ {current_user.username}', link=url_for('post_view', post_id=post.id), from_user_id=current_user.id)
         if co_author_user:
-            create_notification(co_author_user.id, 'collab', f'Вас добавили со‑автором поста', link=url_for('post_view', post_id=post.id), from_user_id=current_user.id)
+            create_notification(co_author_user.id, 'collab', f'Р’Р°СЃ РґРѕР±Р°РІРёР»Рё СЃРѕвЂ‘Р°РІС‚РѕСЂРѕРј РїРѕСЃС‚Р°', link=url_for('post_view', post_id=post.id), from_user_id=current_user.id)
     
     return redirect(url_for('index'))
 
@@ -4652,18 +4660,18 @@ def delete_post(post_id):
     try:
         post = db.session.get(Post, post_id)
         if post and (post.user_id == current_user.id or current_user.is_admin):
-            # Сначала убираем FK на посты в жалобах (nullable поле)
+            # РЎРЅР°С‡Р°Р»Р° СѓР±РёСЂР°РµРј FK РЅР° РїРѕСЃС‚С‹ РІ Р¶Р°Р»РѕР±Р°С… (nullable РїРѕР»Рµ)
             Report.query.filter_by(post_id=post_id).update({'post_id': None})
             db.session.flush()
             db.session.delete(post)
             db.session.commit()
-            flash("Пост удалён", "success")
+            flash("РџРѕСЃС‚ СѓРґР°Р»С‘РЅ", "success")
         else:
-            flash("Нет доступа", "danger")
+            flash("РќРµС‚ РґРѕСЃС‚СѓРїР°", "danger")
     except Exception as e:
         db.session.rollback()
         print(f"[delete_post ERROR] {e}")
-        flash("Ошибка при удалении поста. Попробуй ещё раз.", "danger")
+        flash("РћС€РёР±РєР° РїСЂРё СѓРґР°Р»РµРЅРёРё РїРѕСЃС‚Р°. РџРѕРїСЂРѕР±СѓР№ РµС‰С‘ СЂР°Р·.", "danger")
     return redirect(request.referrer or url_for('index'))
 
 @app.route('/like/<int:post_id>', methods=['POST'])
@@ -4675,7 +4683,7 @@ def like_post(post_id):
         db.session.add(Like(user_id=current_user.id, post_id=post_id))
         post = db.session.get(Post, post_id)
         if post and post.user_id != current_user.id:
-            create_notification(post.user_id, 'like', f'{current_user.username} лайкнул ваш пост', link=url_for('post_view', post_id=post.id), from_user_id=current_user.id)
+            create_notification(post.user_id, 'like', f'{current_user.username} Р»Р°Р№РєРЅСѓР» РІР°С€ РїРѕСЃС‚', link=url_for('post_view', post_id=post.id), from_user_id=current_user.id)
     db.session.commit()
     return redirect(request.referrer)
 
@@ -4688,29 +4696,29 @@ def add_comment(post_id):
     if post and not post.comments_enabled:
         return redirect(url_for('index'))
     
-    # AI модерация комментариев
+    # AI РјРѕРґРµСЂР°С†РёСЏ РєРѕРјРјРµРЅС‚Р°СЂРёРµРІ
     is_ok, reason = moderate_content(text)
     
     if not consume_idempotency_token(f'comment:{post_id}', client_token):
-        flash("Комментарий уже был отправлен. Дубликат остановлен.", "warning")
+        flash("РљРѕРјРјРµРЅС‚Р°СЂРёР№ СѓР¶Рµ Р±С‹Р» РѕС‚РїСЂР°РІР»РµРЅ. Р”СѓР±Р»РёРєР°С‚ РѕСЃС‚Р°РЅРѕРІР»РµРЅ.", "warning")
         return redirect(url_for('index'))
 
     if text and is_ok:
         if recent_duplicate_signature(f'comment-sig:{post_id}', text):
-            flash("Похожий комментарий уже появился. Дубликат остановлен.", "warning")
+            flash("РџРѕС…РѕР¶РёР№ РєРѕРјРјРµРЅС‚Р°СЂРёР№ СѓР¶Рµ РїРѕСЏРІРёР»СЃСЏ. Р”СѓР±Р»РёРєР°С‚ РѕСЃС‚Р°РЅРѕРІР»РµРЅ.", "warning")
             return redirect(url_for('index'))
         db.session.add(Comment(text=text, user_id=current_user.id, post_id=post_id, client_token=client_token or None))
         db.session.commit()
         if post and post.user_id != current_user.id:
-            create_notification(post.user_id, 'comment', f'{current_user.username} прокомментировал ваш пост', link=url_for('post_view', post_id=post.id), from_user_id=current_user.id)
+            create_notification(post.user_id, 'comment', f'{current_user.username} РїСЂРѕРєРѕРјРјРµРЅС‚РёСЂРѕРІР°Р» РІР°С€ РїРѕСЃС‚', link=url_for('post_view', post_id=post.id), from_user_id=current_user.id)
         if text:
             mentions = set(re.findall(r'@([A-Za-z0-9_\\.]+)', text))
             for uname in mentions:
                 u = User.query.filter_by(username=uname).first()
                 if u:
-                    create_notification(u.id, 'mention', f'Вас упомянули в комментарии', link=url_for('post_view', post_id=post_id), from_user_id=current_user.id)
+                    create_notification(u.id, 'mention', f'Р’Р°СЃ СѓРїРѕРјСЏРЅСѓР»Рё РІ РєРѕРјРјРµРЅС‚Р°СЂРёРё', link=url_for('post_view', post_id=post_id), from_user_id=current_user.id)
     elif not is_ok:
-        flash(f"⚠️ Комментарий заблокирован: {reason}", "warning")
+        flash(f"вљ пёЏ РљРѕРјРјРµРЅС‚Р°СЂРёР№ Р·Р°Р±Р»РѕРєРёСЂРѕРІР°РЅ: {reason}", "warning")
     
     return redirect(url_for('index'))
 
@@ -4740,7 +4748,7 @@ def flux_feed():
 @app.route('/flux/view/<int:id>', methods=['POST'])
 @login_required
 def track_flux_view(id):
-    """Счётчик просмотров: вызывается из JS один раз при реальном показе видео."""
+    """РЎС‡С‘С‚С‡РёРє РїСЂРѕСЃРјРѕС‚СЂРѕРІ: РІС‹Р·С‹РІР°РµС‚СЃСЏ РёР· JS РѕРґРёРЅ СЂР°Р· РїСЂРё СЂРµР°Р»СЊРЅРѕРј РїРѕРєР°Р·Рµ РІРёРґРµРѕ."""
     viewed = session.get('flux_viewed_ids', [])
     if id not in viewed:
         v = FluxVideo.query.get(id)
@@ -4764,7 +4772,7 @@ def upload_flux():
             new_flux = FluxVideo(user_id=current_user.id, video_url=url, description=desc)
             db.session.add(new_flux)
             db.session.commit()
-            flash("Flux опубликован!", "success")
+            flash("Flux РѕРїСѓР±Р»РёРєРѕРІР°РЅ!", "success")
     return redirect(url_for('flux_feed'))
 
 @app.route('/flux/like/<int:id>', methods=['POST'])
@@ -4788,9 +4796,9 @@ def like_flux(id):
 def comment_flux_ajax(id):
     text = request.form.get('text', '').strip()
     if not text:
-        return jsonify({'ok': False, 'error': 'Пустой комментарий'}), 400
+        return jsonify({'ok': False, 'error': 'РџСѓСЃС‚РѕР№ РєРѕРјРјРµРЅС‚Р°СЂРёР№'}), 400
     if len(text) > 300:
-        return jsonify({'ok': False, 'error': 'Слишком длинный'}), 400
+        return jsonify({'ok': False, 'error': 'РЎР»РёС€РєРѕРј РґР»РёРЅРЅС‹Р№'}), 400
     FluxVideo.query.get_or_404(id)
     db.session.add(FluxComment(user_id=current_user.id, video_id=id, text=text))
     db.session.commit()
@@ -4819,7 +4827,7 @@ def delete_comment(comment_id):
         db.session.commit()
     return redirect(url_for('index'))
 
-# Страница моих Flux-видео
+# РЎС‚СЂР°РЅРёС†Р° РјРѕРёС… Flux-РІРёРґРµРѕ
 @app.route('/flux/my_videos')
 @login_required
 def flux_my_videos():
@@ -4832,7 +4840,7 @@ def flux_my_videos():
     video_comments = {v.id: FluxComment.query.filter_by(video_id=v.id).count() for v in my_videos}
     return render_template('flux_my_videos.html', my_videos=my_videos, stats=stats, video_comments=video_comments)
 
-# Удалить своё Flux-видео
+# РЈРґР°Р»РёС‚СЊ СЃРІРѕС‘ Flux-РІРёРґРµРѕ
 @app.route('/flux/delete/<int:video_id>', methods=['POST'])
 @login_required
 def delete_flux(video_id):
@@ -4843,14 +4851,14 @@ def delete_flux(video_id):
     FluxComment.query.filter_by(video_id=video_id).delete()
     db.session.delete(video)
     db.session.commit()
-    flash("Видео удалено", "success")
+    flash("Р’РёРґРµРѕ СѓРґР°Р»РµРЅРѕ", "success")
     return redirect(url_for('flux_my_videos'))
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
     if request.method == 'POST':
         if not validate_captcha(request.form.get('captcha')):
-            flash("Неверная капча", "danger")
+            flash("РќРµРІРµСЂРЅР°СЏ РєР°РїС‡Р°", "danger")
             return redirect(url_for('register'))
         
         email = request.form.get('email')
@@ -4858,10 +4866,10 @@ def register():
         password = request.form.get('password')
         
         if User.query.filter_by(email=email).first():
-            flash("Этот email уже зарегистрирован.", "danger")
+            flash("Р­С‚РѕС‚ email СѓР¶Рµ Р·Р°СЂРµРіРёСЃС‚СЂРёСЂРѕРІР°РЅ.", "danger")
             return redirect(url_for('register'))
         if User.query.filter_by(username=username).first():
-            flash("Этот никнейм уже занят.", "danger")
+            flash("Р­С‚РѕС‚ РЅРёРєРЅРµР№Рј СѓР¶Рµ Р·Р°РЅСЏС‚.", "danger")
             return redirect(url_for('register'))
         
         new_user = User(
@@ -4874,44 +4882,44 @@ def register():
         db.session.commit()
         
         session['temp_user_id'] = new_user.id
-        # Новый пользователь — TG ID нет, идём настраивать
+        # РќРѕРІС‹Р№ РїРѕР»СЊР·РѕРІР°С‚РµР»СЊ вЂ” TG ID РЅРµС‚, РёРґС‘Рј РЅР°СЃС‚СЂР°РёРІР°С‚СЊ
         return redirect(url_for('setup_telegram'))
 
     captcha_q = generate_captcha()
-    return render_template('auth.html', title="Регистрация", is_login=False, captcha_q=captcha_q)
+    return render_template('auth.html', title="Р РµРіРёСЃС‚СЂР°С†РёСЏ", is_login=False, captcha_q=captcha_q)
 
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
         if not validate_captcha(request.form.get('captcha')):
-            flash("Неверная капча", "danger")
+            flash("РќРµРІРµСЂРЅР°СЏ РєР°РїС‡Р°", "danger")
             return redirect(url_for('login'))
             
         user = User.query.filter_by(username=request.form.get('username')).first()
         if user and check_password_hash(user.password, request.form.get('password')):
             if user.is_banned:
-                flash("Вы забанены.", "danger")
+                flash("Р’С‹ Р·Р°Р±Р°РЅРµРЅС‹.", "danger")
                 return redirect(url_for('login'))
             
             session['temp_user_id'] = user.id
-            # Если TG ID не привязан — сначала настроить
+            # Р•СЃР»Рё TG ID РЅРµ РїСЂРёРІСЏР·Р°РЅ вЂ” СЃРЅР°С‡Р°Р»Р° РЅР°СЃС‚СЂРѕРёС‚СЊ
             if not user.telegram_id:
                 return redirect(url_for('setup_telegram'))
             if send_verification_code(user.email):
                 return redirect(url_for('verify_email'))
             else:
-                flash("Ошибка отправки кода", "danger")
+                flash("РћС€РёР±РєР° РѕС‚РїСЂР°РІРєРё РєРѕРґР°", "danger")
         else:
-            flash("Неверный логин или пароль", "danger")
+            flash("РќРµРІРµСЂРЅС‹Р№ Р»РѕРіРёРЅ РёР»Рё РїР°СЂРѕР»СЊ", "danger")
 
     captcha_q = generate_captcha()
-    return render_template('auth.html', title="Вход", is_login=True, captcha_q=captcha_q)
+    return render_template('auth.html', title="Р’С…РѕРґ", is_login=True, captcha_q=captcha_q)
 
 
 @app.route('/setup_telegram', methods=['GET', 'POST'])
 def setup_telegram():
-    """Страница привязки Telegram ID перед отправкой кода подтверждения."""
+    """РЎС‚СЂР°РЅРёС†Р° РїСЂРёРІСЏР·РєРё Telegram ID РїРµСЂРµРґ РѕС‚РїСЂР°РІРєРѕР№ РєРѕРґР° РїРѕРґС‚РІРµСЂР¶РґРµРЅРёСЏ."""
     user_id = session.get('temp_user_id')
     if not user_id:
         return redirect(url_for('login'))
@@ -4919,43 +4927,43 @@ def setup_telegram():
     if request.method == 'POST':
         tg_id = request.form.get('telegram_id', '').strip()
         if not tg_id or not tg_id.isdigit():
-            flash("Введи корректный Telegram ID (только цифры)", "danger")
+            flash("Р’РІРµРґРё РєРѕСЂСЂРµРєС‚РЅС‹Р№ Telegram ID (С‚РѕР»СЊРєРѕ С†РёС„СЂС‹)", "danger")
             return redirect(url_for('setup_telegram'))
 
         user = db.session.get(User, user_id)
         if not user:
-            flash("Пользователь не найден", "danger")
+            flash("РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ РЅРµ РЅР°Р№РґРµРЅ", "danger")
             return redirect(url_for('login'))
 
         user.telegram_id = tg_id
         db.session.commit()
 
         if send_verification_code(user.email):
-            flash("Код отправлен в Telegram!", "success")
+            flash("РљРѕРґ РѕС‚РїСЂР°РІР»РµРЅ РІ Telegram!", "success")
             return redirect(url_for('verify_email'))
         else:
-            flash("Ошибка отправки кода", "danger")
+            flash("РћС€РёР±РєР° РѕС‚РїСЂР°РІРєРё РєРѕРґР°", "danger")
             return redirect(url_for('setup_telegram'))
 
-    # --- ПРАВИЛЬНАЯ ЗАГРУЗКА ШАБЛОНА (БЕЗ ОШИБОК И ЛИШНЕГО КОДА НА ЭКРАНЕ) ---
+    # --- РџР РђР’РР›Р¬РќРђРЇ Р—РђР“Р РЈР—РљРђ РЁРђР‘Р›РћРќРђ (Р‘Р•Р— РћРЁРР‘РћРљ Р Р›РРЁРќР•Р“Рћ РљРћР”Рђ РќРђ Р­РљР РђРќР•) ---
     try:
-        # Пытаемся отрендерить стандартно
+        # РџС‹С‚Р°РµРјСЃСЏ РѕС‚СЂРµРЅРґРµСЂРёС‚СЊ СЃС‚Р°РЅРґР°СЂС‚РЅРѕ
         return render_template('setup_telegram.html')
     except Exception:
-        # Если Flask опять "потерял" папку templates, читаем файл принудительно
+        # Р•СЃР»Рё Flask РѕРїСЏС‚СЊ "РїРѕС‚РµСЂСЏР»" РїР°РїРєСѓ templates, С‡РёС‚Р°РµРј С„Р°Р№Р» РїСЂРёРЅСѓРґРёС‚РµР»СЊРЅРѕ
         import os
         from flask import render_template_string
         
-        # Определяем путь к файлу шаблона
+        # РћРїСЂРµРґРµР»СЏРµРј РїСѓС‚СЊ Рє С„Р°Р№Р»Сѓ С€Р°Р±Р»РѕРЅР°
         template_path = os.path.join(app.root_path, 'templates', 'setup_telegram.html')
         
         if os.path.exists(template_path):
             with open(template_path, 'r', encoding='utf-8') as f:
                 template_content = f.read()
-                # Используем render_template_string, чтобы убрать "кракозябры" со скрина
+                # РСЃРїРѕР»СЊР·СѓРµРј render_template_string, С‡С‚РѕР±С‹ СѓР±СЂР°С‚СЊ "РєСЂР°РєРѕР·СЏР±СЂС‹" СЃРѕ СЃРєСЂРёРЅР°
                 return render_template_string(template_content)
         
-        return f"Критическая ошибка: файл не найден даже по пути {template_path}"
+        return f"РљСЂРёС‚РёС‡РµСЃРєР°СЏ РѕС€РёР±РєР°: С„Р°Р№Р» РЅРµ РЅР°Р№РґРµРЅ РґР°Р¶Рµ РїРѕ РїСѓС‚Рё {template_path}"
 
 @app.route('/verify_email', methods=['GET', 'POST'])
 def verify_email():
@@ -4980,12 +4988,12 @@ def verify_email():
                 db.session.add(UserSession(user_id=user.id, session_token=token, ip=ip, city=guess_city(ip), user_agent=request.headers.get('User-Agent')))
                 db.session.commit()
                 
-                flash("Успешный вход!", "success")
+                flash("РЈСЃРїРµС€РЅС‹Р№ РІС…РѕРґ!", "success")
                 return redirect(url_for('index'))
         else:
-            flash("Неверный код", "danger")
+            flash("РќРµРІРµСЂРЅС‹Р№ РєРѕРґ", "danger")
     
-    return render_template('auth.html', title="Подтверждение", is_login=True, show_verify=True, captcha_q=generate_captcha())
+    return render_template('auth.html', title="РџРѕРґС‚РІРµСЂР¶РґРµРЅРёРµ", is_login=True, show_verify=True, captcha_q=generate_captcha())
 
 
 @app.route('/logout')
@@ -5017,23 +5025,23 @@ def confirm_email(token):
         user.email_confirmed = True
         user.email_confirmation_token = None
         db.session.commit()
-        flash("Email подтвержден! Теперь вы можете войти.", "success")
+        flash("Email РїРѕРґС‚РІРµСЂР¶РґРµРЅ! РўРµРїРµСЂСЊ РІС‹ РјРѕР¶РµС‚Рµ РІРѕР№С‚Рё.", "success")
     else:
-        flash("Недействительная ссылка для подтверждения.", "danger")
+        flash("РќРµРґРµР№СЃС‚РІРёС‚РµР»СЊРЅР°СЏ СЃСЃС‹Р»РєР° РґР»СЏ РїРѕРґС‚РІРµСЂР¶РґРµРЅРёСЏ.", "danger")
     return redirect(url_for('login'))
 
 
 # --- FONTAN AI ---
 
 def call_groq_api(messages_history):
-    """Вызов Groq API с таймаутом"""
+    """Р’С‹Р·РѕРІ Groq API СЃ С‚Р°Р№РјР°СѓС‚РѕРј"""
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json"
     }
     payload = {
         "model": GROQ_MODEL,
-        "messages": [{"role": "system", "content": "Ты FontanAI — дружелюбный ИИ-помощник социальной сети Fontan. Отвечай на русском языке. Будь полезным, дружелюбным и кратким."}] + messages_history,
+        "messages": [{"role": "system", "content": "РўС‹ FontanAI вЂ” РґСЂСѓР¶РµР»СЋР±РЅС‹Р№ РР-РїРѕРјРѕС‰РЅРёРє СЃРѕС†РёР°Р»СЊРЅРѕР№ СЃРµС‚Рё Fontan. РћС‚РІРµС‡Р°Р№ РЅР° СЂСѓСЃСЃРєРѕРј СЏР·С‹РєРµ. Р‘СѓРґСЊ РїРѕР»РµР·РЅС‹Рј, РґСЂСѓР¶РµР»СЋР±РЅС‹Рј Рё РєСЂР°С‚РєРёРј."}] + messages_history,
         "max_tokens": 1024,
         "temperature": 0.7
     }
@@ -5055,6 +5063,31 @@ def call_groq_api(messages_history):
     except Exception as e:
         return None, str(e)
 
+def get_fontan_identity_reply(user_text):
+    text = (user_text or "").strip().lower()
+    if not text:
+        return None
+
+    identity_patterns = [
+        r"\bкто\s+ты\b",
+        r"\bты\s+кто\b",
+        r"\bкто\s+тебя\s+создал\b",
+        r"\bна\s+ч[её]м\s+ты\s+создан",
+        r"\bкак\s+тебя\s+создали\b",
+        r"\bwhat\s+are\s+you\b",
+        r"\bwho\s+are\s+you\b",
+        r"\bhow\s+were\s+you\s+made\b",
+    ]
+
+    if any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in identity_patterns):
+        return (
+            "Я искусственная модель Fontan AI. "
+            "Меня создали для помощи пользователям платформы Fontan: "
+            "отвечаю на вопросы, помогаю с текстами и идеями."
+        )
+
+    return None
+
 @app.route('/fontan_ai')
 @login_required
 def fontan_ai():
@@ -5064,7 +5097,7 @@ def fontan_ai():
 @app.route('/api/ai/new_chat', methods=['POST'])
 @login_required
 def ai_new_chat():
-    chat = AiChat(user_id=current_user.id, title='Новый чат')
+    chat = AiChat(user_id=current_user.id, title='РќРѕРІС‹Р№ С‡Р°С‚')
     db.session.add(chat)
     db.session.commit()
     return jsonify({'chat_id': chat.id, 'title': chat.title})
@@ -5104,22 +5137,22 @@ def ai_send_message():
     file = request.files.get('file')
 
     if not chat_id:
-        return jsonify({'error': 'Нет chat_id'}), 400
+        return jsonify({'error': 'РќРµС‚ chat_id'}), 400
 
     chat = db.session.get(AiChat, chat_id)
     if not chat or chat.user_id != current_user.id:
-        return jsonify({'error': 'Доступ запрещён'}), 403
+        return jsonify({'error': 'Р”РѕСЃС‚СѓРї Р·Р°РїСЂРµС‰С‘РЅ'}), 403
 
-    # Rate limiting по юзеру
+    # Rate limiting РїРѕ СЋР·РµСЂСѓ
     last_msg = AiMessage.query.filter_by(chat_id=chat_id).filter(
         AiMessage.role == 'user'
     ).order_by(AiMessage.timestamp.desc()).first()
     if last_msg:
         diff = (datetime.utcnow() - last_msg.timestamp).total_seconds()
         if diff < GROQ_COOLDOWN_SECONDS:
-            return jsonify({'error': f'Подожди {int(GROQ_COOLDOWN_SECONDS - diff)+1} сек'}), 429
+            return jsonify({'error': f'РџРѕРґРѕР¶РґРё {int(GROQ_COOLDOWN_SECONDS - diff)+1} СЃРµРє'}), 429
 
-    # Загрузка файла если есть
+    # Р—Р°РіСЂСѓР·РєР° С„Р°Р№Р»Р° РµСЃР»Рё РµСЃС‚СЊ
     file_url, file_type_val = None, None
     if file and file.filename:
         ext = file.filename.rsplit('.', 1)[-1].lower()
@@ -5131,23 +5164,23 @@ def ai_send_message():
             file_type_val = 'file'
 
     if not content and not file_url:
-        return jsonify({'error': 'Пустое сообщение'}), 400
+        return jsonify({'error': 'РџСѓСЃС‚РѕРµ СЃРѕРѕР±С‰РµРЅРёРµ'}), 400
 
-    # Сохраняем сообщение пользователя
+    # РЎРѕС…СЂР°РЅСЏРµРј СЃРѕРѕР±С‰РµРЅРёРµ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ
     user_msg = AiMessage(
         chat_id=chat_id, role='user',
         content=content, file_url=file_url, file_type=file_type_val
     )
     db.session.add(user_msg)
 
-    # Обновляем заголовок чата (первые слова первого сообщения)
-    if chat.title == 'Новый чат' and content:
-        chat.title = content[:50] + ('…' if len(content) > 50 else '')
+    # РћР±РЅРѕРІР»СЏРµРј Р·Р°РіРѕР»РѕРІРѕРє С‡Р°С‚Р° (РїРµСЂРІС‹Рµ СЃР»РѕРІР° РїРµСЂРІРѕРіРѕ СЃРѕРѕР±С‰РµРЅРёСЏ)
+    if chat.title == 'РќРѕРІС‹Р№ С‡Р°С‚' and content:
+        chat.title = content[:50] + ('вЂ¦' if len(content) > 50 else '')
 
     chat.updated_at = datetime.utcnow()
     db.session.commit()
 
-    # Если чат в режиме админа — ждём ответа вручную
+    # Р•СЃР»Рё С‡Р°С‚ РІ СЂРµР¶РёРјРµ Р°РґРјРёРЅР° вЂ” Р¶РґС‘Рј РѕС‚РІРµС‚Р° РІСЂСѓС‡РЅСѓСЋ
     if chat.is_admin_mode:
         return jsonify({
             'user_msg': {'id': user_msg.id, 'role': 'user', 'content': content,
@@ -5157,18 +5190,22 @@ def ai_send_message():
             'admin_mode': True
         })
 
-    # Строим историю для Groq
+    # РЎС‚СЂРѕРёРј РёСЃС‚РѕСЂРёСЋ РґР»СЏ Groq
     history = []
     for m in chat.messages:
         if m.role in ('user', 'assistant'):
-            history.append({"role": m.role, "content": m.content or '[файл]'})
+            history.append({"role": m.role, "content": m.content or '[С„Р°Р№Р»]'})
 
-    ai_text, error = call_groq_api(history)
+    identity_reply = get_fontan_identity_reply(content)
+    if identity_reply:
+        ai_text, error = identity_reply, None
+    else:
+        ai_text, error = call_groq_api(history)
 
     if error == 'timeout' or error == 'rate_limit':
-        ai_text = "⏳ Попробуйте позже — нейросеть сейчас не отвечает. Повтори запрос через минуту."
+        ai_text = "вЏі РџРѕРїСЂРѕР±СѓР№С‚Рµ РїРѕР·Р¶Рµ вЂ” РЅРµР№СЂРѕСЃРµС‚СЊ СЃРµР№С‡Р°СЃ РЅРµ РѕС‚РІРµС‡Р°РµС‚. РџРѕРІС‚РѕСЂРё Р·Р°РїСЂРѕСЃ С‡РµСЂРµР· РјРёРЅСѓС‚Сѓ."
     elif error and not ai_text:
-        ai_text = "❌ Произошла ошибка. Попробуй позже."
+        ai_text = "вќЊ РџСЂРѕРёР·РѕС€Р»Р° РѕС€РёР±РєР°. РџРѕРїСЂРѕР±СѓР№ РїРѕР·Р¶Рµ."
 
     ai_msg = AiMessage(chat_id=chat_id, role='assistant', content=ai_text)
     db.session.add(ai_msg)
@@ -5218,12 +5255,12 @@ def admin_ai_reply(chat_id):
     chat = db.session.get(AiChat, chat_id)
     if not chat or not content:
         return jsonify({'error': 'Bad request'}), 400
-    # Сохраняем как 'assistant' чтобы юзер видел как ответ ИИ
+    # РЎРѕС…СЂР°РЅСЏРµРј РєР°Рє 'assistant' С‡С‚РѕР±С‹ СЋР·РµСЂ РІРёРґРµР» РєР°Рє РѕС‚РІРµС‚ РР
     msg = AiMessage(chat_id=chat_id, role='assistant', content=content)
     db.session.add(msg)
     chat.updated_at = datetime.utcnow()
     db.session.commit()
-    # Уведомить через socketio
+    # РЈРІРµРґРѕРјРёС‚СЊ С‡РµСЂРµР· socketio
     socketio.emit('ai_message', {
         'chat_id': chat_id,
         'role': 'assistant',
@@ -5308,7 +5345,7 @@ def on_call_decline(data):
         return
     emit('call_declined', {
         'from_id': current_user.id,
-        'reason': data.get('reason', 'Отклонено')
+        'reason': data.get('reason', 'РћС‚РєР»РѕРЅРµРЅРѕ')
     }, to=f"user_{int(to_user_id)}")
 
 @socketio.on('call_end')
@@ -5318,7 +5355,7 @@ def on_call_end(data):
         return
     emit('call_ended', {
         'from_id': current_user.id,
-        'reason': data.get('reason', 'Звонок завершён')
+        'reason': data.get('reason', 'Р—РІРѕРЅРѕРє Р·Р°РІРµСЂС€С‘РЅ')
     }, to=f"user_{int(to_user_id)}")
 
 @socketio.on('call_signal')
@@ -5332,12 +5369,12 @@ def on_call_signal(data):
         'signal': signal
     }, to=f"user_{int(to_user_id)}")
 
-# --- СОЗДАНИЕ ТАБЛИЦ И АДМИНА ---
+# --- РЎРћР—Р”РђРќРР• РўРђР‘Р›РР¦ Р РђР”РњРРќРђ ---
 with app.app_context():
     db.create_all()
     
-    # --- ВРЕМЕННЫЙ ФИКС БАЗЫ ДАННЫХ (ЛЕЧЕНИЕ ОШИБКИ) ---
-    # Этот блок добавит недостающие колонки в существующую базу на Render
+    # --- Р’Р Р•РњР•РќРќР«Р™ Р¤РРљРЎ Р‘РђР—Р« Р”РђРќРќР«РҐ (Р›Р•Р§Р•РќРР• РћРЁРР‘РљР) ---
+    # Р­С‚РѕС‚ Р±Р»РѕРє РґРѕР±Р°РІРёС‚ РЅРµРґРѕСЃС‚Р°СЋС‰РёРµ РєРѕР»РѕРЅРєРё РІ СЃСѓС‰РµСЃС‚РІСѓСЋС‰СѓСЋ Р±Р°Р·Сѓ РЅР° Render
     from sqlalchemy import text
     try:
         with db.engine.connect() as conn:
@@ -5375,7 +5412,7 @@ with app.app_context():
                 CREATE TABLE IF NOT EXISTS ai_chats (
                     id SERIAL PRIMARY KEY,
                     user_id INTEGER REFERENCES users(id),
-                    title VARCHAR(200) DEFAULT 'Новый чат',
+                    title VARCHAR(200) DEFAULT 'РќРѕРІС‹Р№ С‡Р°С‚',
                     created_at TIMESTAMP DEFAULT NOW(),
                     updated_at TIMESTAMP DEFAULT NOW(),
                     is_admin_mode BOOLEAN DEFAULT FALSE
@@ -5393,29 +5430,29 @@ with app.app_context():
                 )
             """))
             conn.commit()
-            print(">>> УСПЕШНО: Колонки добавлены в базу данных! <<<")
+            print(">>> РЈРЎРџР•РЁРќРћ: РљРѕР»РѕРЅРєРё РґРѕР±Р°РІР»РµРЅС‹ РІ Р±Р°Р·Сѓ РґР°РЅРЅС‹С…! <<<")
     except Exception as e:
-        print(f">>> INFO (не ошибка): {e}")
+        print(f">>> INFO (РЅРµ РѕС€РёР±РєР°): {e}")
     # ---------------------------------------------------
 
-    # Создание админа
+    # РЎРѕР·РґР°РЅРёРµ Р°РґРјРёРЅР°
     admin = User.query.filter_by(username='admin').first()
     if not admin:
-        print("Создаю админа...")
+        print("РЎРѕР·РґР°СЋ Р°РґРјРёРЅР°...")
         admin = User(
             username='admin',
             email='admin@fontan.local',
             password=generate_password_hash('12we1qtr11'),
             is_admin=True,
             is_verified=True,
-            bio="Главный Администратор",
+            bio="Р“Р»Р°РІРЅС‹Р№ РђРґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂ",
             theme='dark'
         )
         db.session.add(admin)
         db.session.commit()
-        print("Админ создан: admin / 12we1qtr11")
+        print("РђРґРјРёРЅ СЃРѕР·РґР°РЅ: admin / 12we1qtr11")
 
 if __name__ == '__main__':
-    # Для Render важно использовать host='0.0.0.0' и порт из окружения
+    # Р”Р»СЏ Render РІР°Р¶РЅРѕ РёСЃРїРѕР»СЊР·РѕРІР°С‚СЊ host='0.0.0.0' Рё РїРѕСЂС‚ РёР· РѕРєСЂСѓР¶РµРЅРёСЏ
     port = int(os.environ.get("PORT", 5000))
     socketio.run(app, host='0.0.0.0', port=port, debug=False)
