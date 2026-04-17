@@ -51,6 +51,13 @@ CF_WORKER_URL = "https://fontan.arthur-kgame1.workers.dev"
 # ВСТАВЬ СВОЙ ID ИЗ @userinfobot НИЖЕ:
 ADMIN_TG_ID = "1373304655"
 
+# --- GROQ AI CONFIG ---
+GROQ_API_KEY = os.environ.get('GROQ_API_KEY', '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')
+GROQ_MODEL = "llama3-70b-8192"
+GROQ_COOLDOWN_SECONDS = 3   # минимум секунд между запросами от одного юзера
+GROQ_TIMEOUT_SECONDS = 15   # если нет ответа за 15с — "попробуй позже"
+AI_ADMIN_MODE = {}  # {chat_id: True} — в каком чате админ отвечает сам
+
 # --- WEBRTC ICE СЕРВЕРЫ (STUN/TURN) ---
 WEBRTC_ICE_SERVERS = [
     {"urls": "stun:stun.l.google.com:19302"},
@@ -468,6 +475,27 @@ class SiteStats(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     total_visitors = db.Column(db.Integer, default=0)
     peak_online = db.Column(db.Integer, default=0)
+
+class AiChat(db.Model):
+    __tablename__ = 'ai_chats'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    title = db.Column(db.String(200), default='Новый чат')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow)
+    is_admin_mode = db.Column(db.Boolean, default=False)
+    user = db.relationship('User', foreign_keys=[user_id])
+    messages = db.relationship('AiMessage', backref='chat', cascade='all, delete-orphan', order_by='AiMessage.timestamp')
+
+class AiMessage(db.Model):
+    __tablename__ = 'ai_messages'
+    id = db.Column(db.Integer, primary_key=True)
+    chat_id = db.Column(db.Integer, db.ForeignKey('ai_chats.id'), nullable=False)
+    role = db.Column(db.String(20), nullable=False)  # user | assistant | admin
+    content = db.Column(db.Text, nullable=True)
+    file_url = db.Column(db.String(300), nullable=True)
+    file_type = db.Column(db.String(20), nullable=True)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
 
 
 
@@ -1009,6 +1037,7 @@ templates = {
             <div class="d-flex gap-3 align-items-center">
                 {% if current_user.is_authenticated %}
                     <a class="nav-link text-white fs-5" href="{{ url_for('flux_feed') }}" title="Flux (Shorts)"><i class="bi bi-play-btn-fill"></i></a>
+                    <a class="nav-link text-white fs-5" href="{{ url_for('fontan_ai') }}" title="FontanAI"><i class="bi bi-robot"></i></a>
                     <span class="theme-toggle text-white" onclick="toggleTheme()">
                         <i class="bi bi-moon-stars-fill" id="theme-icon"></i>
                     </span>
@@ -2779,6 +2808,7 @@ function votePoll(pollId, optionIndex) {
                 <a href="{{ url_for('admin_reports') }}" class="btn btn-outline-danger rounded-pill"><i class="bi bi-flag-fill me-1"></i>Жалобы</a>
                 <a href="{{ url_for('users_list') }}" class="btn btn-outline-primary rounded-pill"><i class="bi bi-people-fill me-1"></i>Все пользователи</a>
                 <a href="{{ url_for('admin_flux_list') }}" class="btn btn-outline-secondary rounded-pill"><i class="bi bi-play-btn-fill me-1"></i>Flux видео</a>
+                <a href="{{ url_for('admin_ai_chats') }}" class="btn btn-outline-primary rounded-pill"><i class="bi bi-robot me-1"></i>FontanAI чаты</a>
             </div>
             <hr>
             <h6 class="fw-bold mb-2">Рассылка всем</h6>
@@ -3455,6 +3485,421 @@ new Chart(document.getElementById('postsChart'), {
 </div>
 {% endif %}
 {% endblock %}
+""",
+
+    'fontan_ai.html': """
+{% extends "base.html" %}
+{% block content %}
+<style>
+.ai-layout { display: flex; gap: 0; height: calc(100vh - 120px); max-height: 800px; border-radius: 20px; overflow: hidden; border: 1px solid var(--border-color); background: var(--card-bg); }
+.ai-sidebar { width: 260px; min-width: 220px; border-right: 1px solid var(--border-color); display: flex; flex-direction: column; background: var(--card-bg); }
+.ai-sidebar-header { padding: 16px; border-bottom: 1px solid var(--border-color); }
+.ai-chat-list { flex: 1; overflow-y: auto; padding: 8px; }
+.ai-chat-item { padding: 10px 14px; border-radius: 12px; cursor: pointer; margin-bottom: 4px; transition: background .2s; display: flex; align-items: center; gap: 8px; }
+.ai-chat-item:hover, .ai-chat-item.active { background: var(--hover-bg); }
+.ai-chat-item .chat-title { font-size: 0.88rem; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-chat-item .chat-time { font-size: 0.72rem; color: var(--text-muted); flex-shrink: 0; }
+.ai-main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.ai-chat-header { padding: 14px 20px; border-bottom: 1px solid var(--border-color); display: flex; align-items: center; gap: 12px; }
+.ai-messages { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+.ai-msg { display: flex; gap: 10px; max-width: 85%; animation: fadeIn .3s ease-out; }
+.ai-msg.user { align-self: flex-end; flex-direction: row-reverse; }
+.ai-msg.assistant { align-self: flex-start; }
+.ai-bubble { padding: 10px 16px; border-radius: 18px; font-size: 0.93rem; line-height: 1.5; word-break: break-word; }
+.ai-msg.user .ai-bubble { background: linear-gradient(135deg, #4f46e5, #7c3aed); color: #fff; border-radius: 18px 18px 4px 18px; }
+.ai-msg.assistant .ai-bubble { background: var(--hover-bg); color: var(--text-color); border-radius: 18px 18px 18px 4px; }
+.ai-avatar { width: 34px; height: 34px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; flex-shrink: 0; }
+.ai-avatar.bot { background: linear-gradient(135deg, #4f46e5, #7c3aed); color: #fff; }
+.ai-avatar.user { background: var(--hover-bg); }
+.ai-input-area { padding: 14px 20px; border-top: 1px solid var(--border-color); }
+.ai-input-row { display: flex; gap: 8px; align-items: flex-end; background: var(--hover-bg); border-radius: 16px; padding: 8px 12px; }
+.ai-input-row textarea { flex: 1; background: transparent; border: none; resize: none; color: var(--text-color); font-size: 0.93rem; max-height: 120px; outline: none; padding: 4px 0; }
+.ai-send-btn { width: 38px; height: 38px; border-radius: 50%; background: linear-gradient(135deg, #4f46e5, #7c3aed); border: none; color: #fff; display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; transition: transform .15s; }
+.ai-send-btn:hover:not(:disabled) { transform: scale(1.1); }
+.ai-send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.ai-typing { display: flex; gap: 4px; align-items: center; padding: 10px 16px; background: var(--hover-bg); border-radius: 18px 18px 18px 4px; width: fit-content; }
+.ai-typing span { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); animation: typingBounce 1.2s infinite; }
+.ai-typing span:nth-child(2) { animation-delay: .2s; }
+.ai-typing span:nth-child(3) { animation-delay: .4s; }
+@keyframes typingBounce { 0%,60%,100%{transform:translateY(0);} 30%{transform:translateY(-6px);} }
+.ai-file-preview { display: flex; align-items: center; gap: 8px; background: var(--card-bg); border-radius: 10px; padding: 6px 10px; margin-bottom: 6px; font-size: 0.82rem; border: 1px solid var(--border-color); }
+.ai-file-label { cursor: pointer; color: var(--text-muted); }
+.ai-file-label:hover { color: var(--accent); }
+.ai-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--text-muted); gap: 12px; }
+.ai-admin-badge { font-size: 0.7rem; background: #f97316; color: #fff; padding: 2px 7px; border-radius: 8px; }
+@keyframes fadeIn { from{opacity:0;transform:translateY(10px);} to{opacity:1;transform:translateY(0);} }
+@media(max-width:600px){.ai-sidebar{display:none;} .ai-sidebar.show{display:flex;position:fixed;inset:0;z-index:999;width:100%;}}
+.ai-msg-file img { max-width: 220px; border-radius: 12px; margin-top: 6px; cursor: pointer; }
+.ai-msg-file a { color: inherit; text-decoration: underline; font-size: 0.82rem; }
+</style>
+
+<div class="ai-layout">
+  <!-- Sidebar -->
+  <div class="ai-sidebar" id="aiSidebar">
+    <div class="ai-sidebar-header">
+      <div class="d-flex align-items-center justify-content-between mb-2">
+        <span class="fw-bold"><i class="bi bi-robot me-1" style="color:#7c3aed"></i>FontanAI</span>
+      </div>
+      <button class="btn btn-primary btn-sm w-100 rounded-pill" onclick="newChat()">
+        <i class="bi bi-plus-lg me-1"></i>Новый чат
+      </button>
+    </div>
+    <div class="ai-chat-list" id="chatList">
+      {% for c in chats %}
+      <div class="ai-chat-item {% if loop.first %}active{% endif %}" data-chat-id="{{ c.id }}" onclick="loadChat({{ c.id }}, this)">
+        <i class="bi bi-chat-dots text-muted" style="font-size:.9rem;flex-shrink:0;"></i>
+        <span class="chat-title">{{ c.title }}</span>
+        <span class="chat-time">{{ c.updated_at|time_ago }}</span>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- Main -->
+  <div class="ai-main">
+    <div class="ai-chat-header">
+      <button class="btn btn-sm btn-outline-secondary d-md-none" onclick="document.getElementById('aiSidebar').classList.toggle('show')">
+        <i class="bi bi-list"></i>
+      </button>
+      <div class="ai-avatar bot"><i class="bi bi-robot"></i></div>
+      <div class="flex-1">
+        <span class="fw-semibold" id="chatTitle">{% if chats %}{{ chats[0].title }}{% else %}FontanAI{% endif %}</span>
+        <div class="text-muted small" style="font-size:.75rem;">Powered by Groq · Llama3-70B</div>
+      </div>
+      <div class="ms-auto d-flex gap-2">
+        <button class="btn btn-sm btn-outline-danger rounded-pill" id="deleteChatBtn" onclick="deleteCurrentChat()" style="display:none;">
+          <i class="bi bi-trash"></i>
+        </button>
+      </div>
+    </div>
+
+    <div class="ai-messages" id="aiMessages">
+      <div class="ai-empty" id="aiEmpty">
+        <i class="bi bi-robot" style="font-size:3.5rem;opacity:.3;"></i>
+        <div class="text-center">
+          <div class="fw-semibold">FontanAI готов к работе</div>
+          <div class="small opacity-75">Задай вопрос или создай новый чат</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="ai-input-area">
+      <div id="filePreview" style="display:none;" class="ai-file-preview">
+        <i class="bi bi-paperclip"></i>
+        <span id="filePreviewName" class="flex-1 text-truncate"></span>
+        <button class="btn btn-sm btn-link text-danger p-0" onclick="clearFile()"><i class="bi bi-x"></i></button>
+      </div>
+      <div class="ai-input-row">
+        <label class="ai-file-label" for="aiFileInput" title="Прикрепить файл">
+          <i class="bi bi-paperclip fs-5"></i>
+        </label>
+        <input type="file" id="aiFileInput" style="display:none;" accept="image/*,.pdf,.txt,.doc,.docx" onchange="handleFileSelect(this)">
+        <textarea id="aiInput" placeholder="Напиши сообщение…" rows="1"
+                  onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage();}"
+                  oninput="this.style.height='auto';this.style.height=this.scrollHeight+'px'"></textarea>
+        <button class="ai-send-btn" id="aiSendBtn" onclick="sendMessage()">
+          <i class="bi bi-send-fill"></i>
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+let currentChatId = {% if chats %}{{ chats[0].id }}{% else %}null{% endif %};
+let isWaiting = false;
+
+{% if chats %}loadChat({{ chats[0].id }}, document.querySelector('.ai-chat-item'));{% endif %}
+
+async function newChat() {
+  const res = await fetch('/api/ai/new_chat', {method:'POST'});
+  const data = await res.json();
+  currentChatId = data.chat_id;
+  // Добавляем в список
+  const list = document.getElementById('chatList');
+  const item = document.createElement('div');
+  item.className = 'ai-chat-item active';
+  item.dataset.chatId = data.chat_id;
+  item.onclick = function(){ loadChat(data.chat_id, this); };
+  item.innerHTML = `<i class="bi bi-chat-dots text-muted" style="font-size:.9rem;flex-shrink:0;"></i><span class="chat-title">${data.title}</span><span class="chat-time">только что</span>`;
+  list.querySelectorAll('.ai-chat-item').forEach(el => el.classList.remove('active'));
+  list.prepend(item);
+  document.getElementById('aiMessages').innerHTML = '<div class="ai-empty" id="aiEmpty"><i class="bi bi-robot" style="font-size:3.5rem;opacity:.3;"></i><div class="text-center"><div class="fw-semibold">Новый чат</div><div class="small opacity-75">Задай вопрос FontanAI</div></div></div>';
+  document.getElementById('chatTitle').textContent = 'Новый чат';
+  document.getElementById('deleteChatBtn').style.display = 'inline-block';
+}
+
+async function loadChat(chatId, el) {
+  currentChatId = chatId;
+  document.querySelectorAll('.ai-chat-item').forEach(x => x.classList.remove('active'));
+  if(el) el.classList.add('active');
+  document.getElementById('deleteChatBtn').style.display = 'inline-block';
+  const res = await fetch(`/api/ai/chat/${chatId}`);
+  const data = await res.json();
+  document.getElementById('chatTitle').textContent = data.title;
+  const box = document.getElementById('aiMessages');
+  box.innerHTML = '';
+  if(!data.messages.length){
+    box.innerHTML = '<div class="ai-empty"><i class="bi bi-robot" style="font-size:3.5rem;opacity:.3;"></i><div class="text-center"><div class="fw-semibold">Чат пустой</div><div class="small opacity-75">Напиши первое сообщение!</div></div></div>';
+    return;
+  }
+  data.messages.forEach(m => appendMessage(m));
+  box.scrollTop = box.scrollHeight;
+}
+
+function appendMessage(m) {
+  const box = document.getElementById('aiMessages');
+  const empty = document.getElementById('aiEmpty');
+  if(empty) empty.remove();
+
+  const wrap = document.createElement('div');
+  wrap.className = `ai-msg ${m.role === 'user' ? 'user' : 'assistant'}`;
+
+  const avatar = document.createElement('div');
+  avatar.className = `ai-avatar ${m.role === 'user' ? 'user' : 'bot'}`;
+  avatar.innerHTML = m.role === 'user' ? '<i class="bi bi-person-fill"></i>' : '<i class="bi bi-robot"></i>';
+
+  const bubble = document.createElement('div');
+  bubble.className = 'ai-bubble';
+  let html = '';
+  if(m.content) html += `<div>${m.content.replace(/\\n/g,'<br>')}</div>`;
+  if(m.file_url){
+    if(m.file_type === 'image'){
+      html += `<div class="ai-msg-file"><img src="${m.file_url}" onclick="window.open('${m.file_url}','_blank')"></div>`;
+    } else {
+      html += `<div class="ai-msg-file"><a href="${m.file_url}" target="_blank"><i class="bi bi-paperclip me-1"></i>Файл</a></div>`;
+    }
+  }
+  html += `<div style="font-size:.7rem;opacity:.5;margin-top:4px;text-align:${m.role==='user'?'right':'left'}">${m.timestamp}</div>`;
+  bubble.innerHTML = html;
+
+  if(m.role === 'user') { wrap.appendChild(bubble); wrap.appendChild(avatar); }
+  else { wrap.appendChild(avatar); wrap.appendChild(bubble); }
+  box.appendChild(wrap);
+  box.scrollTop = box.scrollHeight;
+}
+
+function showTyping() {
+  const box = document.getElementById('aiMessages');
+  const empty = document.getElementById('aiEmpty');
+  if(empty) empty.remove();
+  const wrap = document.createElement('div');
+  wrap.className = 'ai-msg assistant';
+  wrap.id = 'typingIndicator';
+  wrap.innerHTML = `<div class="ai-avatar bot"><i class="bi bi-robot"></i></div><div class="ai-typing"><span></span><span></span><span></span></div>`;
+  box.appendChild(wrap);
+  box.scrollTop = box.scrollHeight;
+}
+
+function removeTyping() {
+  const t = document.getElementById('typingIndicator');
+  if(t) t.remove();
+}
+
+let selectedFile = null;
+function handleFileSelect(input) {
+  selectedFile = input.files[0];
+  if(selectedFile){
+    document.getElementById('filePreview').style.display = 'flex';
+    document.getElementById('filePreviewName').textContent = selectedFile.name;
+  }
+}
+function clearFile() {
+  selectedFile = null;
+  document.getElementById('aiFileInput').value = '';
+  document.getElementById('filePreview').style.display = 'none';
+}
+
+async function sendMessage() {
+  if(isWaiting || !currentChatId) return;
+  const input = document.getElementById('aiInput');
+  const text = input.value.trim();
+  if(!text && !selectedFile) return;
+
+  isWaiting = true;
+  document.getElementById('aiSendBtn').disabled = true;
+
+  const formData = new FormData();
+  formData.append('chat_id', currentChatId);
+  if(text) formData.append('content', text);
+  if(selectedFile) formData.append('file', selectedFile);
+
+  input.value = '';
+  input.style.height = 'auto';
+  clearFile();
+
+  showTyping();
+
+  try {
+    const res = await fetch('/api/ai/send', { method: 'POST', body: formData });
+    removeTyping();
+    if(res.status === 429) {
+      const data = await res.json();
+      alert(data.error || 'Подожди немного!');
+      isWaiting = false;
+      document.getElementById('aiSendBtn').disabled = false;
+      return;
+    }
+    const data = await res.json();
+    if(data.error){ alert(data.error); isWaiting = false; document.getElementById('aiSendBtn').disabled = false; return; }
+    appendMessage(data.user_msg);
+    if(data.ai_msg) appendMessage(data.ai_msg);
+    else if(data.admin_mode) {
+      // В режиме ожидания ответа от админа
+      const box = document.getElementById('aiMessages');
+      const notice = document.createElement('div');
+      notice.className = 'text-center text-muted small my-2';
+      notice.textContent = '⏳ Ожидаем ответа оператора…';
+      box.appendChild(notice);
+      box.scrollTop = box.scrollHeight;
+    }
+    // Обновить заголовок в сайдбаре
+    const item = document.querySelector(`.ai-chat-item[data-chat-id="${currentChatId}"] .chat-title`);
+    if(item) item.textContent = document.getElementById('chatTitle').textContent;
+  } catch(e) {
+    removeTyping();
+    appendMessage({role:'assistant',content:'⏳ Попробуйте позже — нейросеть не отвечает.',timestamp:new Date().toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'})});
+  }
+  isWaiting = false;
+  document.getElementById('aiSendBtn').disabled = false;
+  input.focus();
+}
+
+async function deleteCurrentChat() {
+  if(!currentChatId) return;
+  if(!confirm('Удалить этот чат?')) return;
+  await fetch(`/api/ai/delete_chat/${currentChatId}`, {method:'POST'});
+  const item = document.querySelector(`.ai-chat-item[data-chat-id="${currentChatId}"]`);
+  if(item) item.remove();
+  currentChatId = null;
+  document.getElementById('aiMessages').innerHTML = '<div class="ai-empty"><i class="bi bi-robot" style="font-size:3.5rem;opacity:.3;"></i><div class="text-center"><div class="fw-semibold">Чат удалён</div></div></div>';
+  document.getElementById('deleteChatBtn').style.display = 'none';
+}
+
+// Если есть Socket.IO — слушаем ответы от админа
+if(typeof io !== 'undefined') {
+  const sock = io();
+  sock.on('connect', () => { if(currentChatId) sock.emit('join_ai_chat', {chat_id: currentChatId}); });
+  sock.on('ai_message', (data) => {
+    if(data.chat_id == currentChatId) {
+      removeTyping();
+      appendMessage({role:'assistant', content:data.content, timestamp:data.timestamp});
+      isWaiting = false;
+      document.getElementById('aiSendBtn').disabled = false;
+    }
+  });
+}
+</script>
+{% endblock %}
+""",
+
+    'admin_ai_chats.html': """
+{% extends "base.html" %}
+{% block content %}
+<style>
+.ai-admin-chat-list { display: flex; flex-direction: column; gap: 12px; }
+.ai-admin-chat-card { border-radius: 16px; padding: 16px; border: 1px solid var(--border-color); background: var(--card-bg); }
+.ai-chat-msgs { max-height: 300px; overflow-y: auto; background: var(--hover-bg); border-radius: 12px; padding: 12px; margin: 10px 0; display: flex; flex-direction: column; gap: 8px; }
+.ai-admin-msg { padding: 8px 12px; border-radius: 12px; font-size: 0.88rem; max-width: 80%; }
+.ai-admin-msg.user { background: #4f46e5; color: #fff; align-self: flex-end; }
+.ai-admin-msg.assistant { background: var(--border-color); align-self: flex-start; }
+.ai-reply-form { display: flex; gap: 8px; }
+.ai-reply-form input { flex: 1; border-radius: 20px; border: 1px solid var(--border-color); background: var(--card-bg); color: var(--text-color); padding: 8px 16px; }
+.mode-badge { font-size: 0.72rem; padding: 3px 8px; border-radius: 8px; }
+.mode-ai { background: #22c55e; color: #fff; }
+.mode-admin { background: #f97316; color: #fff; }
+</style>
+
+<div class="d-flex align-items-center justify-content-between mb-4">
+  <h3 class="fw-bold mb-0"><i class="bi bi-robot me-2" style="color:#7c3aed"></i>FontanAI — Все чаты</h3>
+  <a href="{{ url_for('admin_dashboard') }}" class="btn btn-outline-secondary rounded-pill"><i class="bi bi-arrow-left me-1"></i>Назад</a>
+</div>
+
+<div class="ai-admin-chat-list">
+{% for chat in chats %}
+<div class="ai-admin-chat-card" id="chatCard{{ chat.id }}">
+  <div class="d-flex align-items-center gap-3 mb-2">
+    <div>
+      <span class="fw-semibold">{{ chat.user.username }}</span>
+      <span class="text-muted small ms-2">{{ chat.title }}</span>
+    </div>
+    <div class="ms-auto d-flex gap-2 align-items-center">
+      <span class="mode-badge {% if chat.is_admin_mode %}mode-admin{% else %}mode-ai{% endif %}" id="modeBadge{{ chat.id }}">
+        {% if chat.is_admin_mode %}👤 Ручной{% else %}🤖 ИИ{% endif %}
+      </span>
+      <button class="btn btn-sm btn-outline-secondary rounded-pill" onclick="toggleMode({{ chat.id }})">
+        Переключить режим
+      </button>
+    </div>
+  </div>
+  <div class="ai-chat-msgs" id="msgs{{ chat.id }}">
+    {% for m in chat.messages %}
+    <div class="ai-admin-msg {{ m.role }}">
+      <div style="font-size:.7rem;opacity:.6;margin-bottom:2px;">{{ 'Пользователь' if m.role == 'user' else 'ИИ / Админ' }} · {{ m.timestamp|time_ago }}</div>
+      {% if m.content %}{{ m.content }}{% endif %}
+      {% if m.file_url and m.file_type == 'image' %}<br><img src="{{ m.file_url }}" style="max-width:140px;border-radius:8px;margin-top:4px;">{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% if chat.is_admin_mode %}
+  <div class="ai-reply-form" id="replyForm{{ chat.id }}">
+    <input type="text" placeholder="Ответить от имени ИИ…" id="replyInput{{ chat.id }}" onkeydown="if(event.key==='Enter') adminReply({{ chat.id }})">
+    <button class="btn btn-primary rounded-pill px-3" onclick="adminReply({{ chat.id }})"><i class="bi bi-send-fill"></i></button>
+  </div>
+  {% else %}
+  <div class="ai-reply-form" id="replyForm{{ chat.id }}" style="display:none;">
+    <input type="text" placeholder="Ответить от имени ИИ…" id="replyInput{{ chat.id }}" onkeydown="if(event.key==='Enter') adminReply({{ chat.id }})">
+    <button class="btn btn-primary rounded-pill px-3" onclick="adminReply({{ chat.id }})"><i class="bi bi-send-fill"></i></button>
+  </div>
+  {% endif %}
+</div>
+{% else %}
+<div class="text-center text-muted py-5">
+  <i class="bi bi-robot" style="font-size:3rem;opacity:.3;"></i>
+  <div class="mt-3">Чатов ещё нет</div>
+</div>
+{% endfor %}
+</div>
+
+<script>
+async function toggleMode(chatId) {
+  const res = await fetch(`/admin/ai_mode/${chatId}`, {method:'POST'});
+  const data = await res.json();
+  const badge = document.getElementById('modeBadge' + chatId);
+  const form = document.getElementById('replyForm' + chatId);
+  if(data.is_admin_mode) {
+    badge.textContent = '👤 Ручной';
+    badge.className = 'mode-badge mode-admin';
+    form.style.display = 'flex';
+  } else {
+    badge.textContent = '🤖 ИИ';
+    badge.className = 'mode-badge mode-ai';
+    form.style.display = 'none';
+  }
+}
+
+async function adminReply(chatId) {
+  const input = document.getElementById('replyInput' + chatId);
+  const text = input.value.trim();
+  if(!text) return;
+  const fd = new FormData();
+  fd.append('content', text);
+  const res = await fetch(`/admin/ai_reply/${chatId}`, {method:'POST', body:fd});
+  if(res.ok) {
+    input.value = '';
+    const msgs = document.getElementById('msgs' + chatId);
+    const div = document.createElement('div');
+    div.className = 'ai-admin-msg assistant';
+    div.innerHTML = `<div style="font-size:.7rem;opacity:.6;margin-bottom:2px;">ИИ / Админ · только что</div>${text}`;
+    msgs.appendChild(div);
+    msgs.scrollTop = msgs.scrollHeight;
+  }
+}
+
+// Прокрутить все чаты вниз
+document.querySelectorAll('.ai-chat-msgs').forEach(el => el.scrollTop = el.scrollHeight);
+</script>
+{% endblock %}
 """
 }
 
@@ -3973,8 +4418,18 @@ def admin_broadcast():
     if not current_user.is_admin: abort(403)
     msg = request.form.get('message', '').strip()
     if msg:
-        for u in User.query.all():
-            create_notification(u.id, 'system', msg, link=url_for('index'), from_user_id=current_user.id)
+        try:
+            users = User.query.all()
+            for u in users:
+                create_notification(u.id, 'system', msg, link=url_for('index'), from_user_id=current_user.id)
+            db.session.commit()
+            flash(f"Рассылка отправлена {len(users)} пользователям!", "success")
+        except Exception as e:
+            db.session.rollback()
+            print(f"[broadcast ERROR] {e}")
+            flash("Ошибка рассылки", "danger")
+    else:
+        flash("Сообщение не может быть пустым", "warning")
     return redirect(url_for('admin_dashboard'))
 
 @app.route('/admin/flux')
@@ -4191,14 +4646,25 @@ def create_post():
     
     return redirect(url_for('index'))
 
-@app.route('/delete_post/<int:post_id>')
+@app.route('/delete_post/<int:post_id>', methods=['GET', 'POST'])
 @login_required
 def delete_post(post_id):
-    post = db.session.get(Post, post_id)
-    if post and (post.user_id == current_user.id or current_user.is_admin):
-        db.session.delete(post)
-        db.session.commit()
-    return redirect(url_for('index'))
+    try:
+        post = db.session.get(Post, post_id)
+        if post and (post.user_id == current_user.id or current_user.is_admin):
+            # Сначала убираем FK на посты в жалобах (nullable поле)
+            Report.query.filter_by(post_id=post_id).update({'post_id': None})
+            db.session.flush()
+            db.session.delete(post)
+            db.session.commit()
+            flash("Пост удалён", "success")
+        else:
+            flash("Нет доступа", "danger")
+    except Exception as e:
+        db.session.rollback()
+        print(f"[delete_post ERROR] {e}")
+        flash("Ошибка при удалении поста. Попробуй ещё раз.", "danger")
+    return redirect(request.referrer or url_for('index'))
 
 @app.route('/like/<int:post_id>', methods=['POST'])
 @login_required
@@ -4557,6 +5023,220 @@ def confirm_email(token):
     return redirect(url_for('login'))
 
 
+# --- FONTAN AI ---
+
+def call_groq_api(messages_history):
+    """Вызов Groq API с таймаутом"""
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": GROQ_MODEL,
+        "messages": [{"role": "system", "content": "Ты FontanAI — дружелюбный ИИ-помощник социальной сети Fontan. Отвечай на русском языке. Будь полезным, дружелюбным и кратким."}] + messages_history,
+        "max_tokens": 1024,
+        "temperature": 0.7
+    }
+    try:
+        resp = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers=headers, json=payload,
+            timeout=GROQ_TIMEOUT_SECONDS
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            return data['choices'][0]['message']['content'], None
+        elif resp.status_code == 429:
+            return None, "rate_limit"
+        else:
+            return None, f"api_error_{resp.status_code}"
+    except requests.Timeout:
+        return None, "timeout"
+    except Exception as e:
+        return None, str(e)
+
+@app.route('/fontan_ai')
+@login_required
+def fontan_ai():
+    chats = AiChat.query.filter_by(user_id=current_user.id).order_by(AiChat.updated_at.desc()).all()
+    return render_template('fontan_ai.html', chats=chats)
+
+@app.route('/api/ai/new_chat', methods=['POST'])
+@login_required
+def ai_new_chat():
+    chat = AiChat(user_id=current_user.id, title='Новый чат')
+    db.session.add(chat)
+    db.session.commit()
+    return jsonify({'chat_id': chat.id, 'title': chat.title})
+
+@app.route('/api/ai/chats')
+@login_required
+def ai_get_chats():
+    chats = AiChat.query.filter_by(user_id=current_user.id).order_by(AiChat.updated_at.desc()).all()
+    return jsonify([{
+        'id': c.id, 'title': c.title,
+        'updated_at': c.updated_at.strftime('%d.%m %H:%M'),
+        'is_admin_mode': c.is_admin_mode
+    } for c in chats])
+
+@app.route('/api/ai/chat/<int:chat_id>')
+@login_required
+def ai_get_messages(chat_id):
+    chat = db.session.get(AiChat, chat_id)
+    if not chat or (chat.user_id != current_user.id and not current_user.is_admin):
+        abort(403)
+    msgs = []
+    for m in chat.messages:
+        msgs.append({
+            'id': m.id, 'role': m.role,
+            'content': m.content,
+            'file_url': m.file_url,
+            'file_type': m.file_type,
+            'timestamp': m.timestamp.strftime('%H:%M')
+        })
+    return jsonify({'messages': msgs, 'title': chat.title, 'is_admin_mode': chat.is_admin_mode})
+
+@app.route('/api/ai/send', methods=['POST'])
+@login_required
+def ai_send_message():
+    chat_id = request.form.get('chat_id', type=int)
+    content = request.form.get('content', '').strip()
+    file = request.files.get('file')
+
+    if not chat_id:
+        return jsonify({'error': 'Нет chat_id'}), 400
+
+    chat = db.session.get(AiChat, chat_id)
+    if not chat or chat.user_id != current_user.id:
+        return jsonify({'error': 'Доступ запрещён'}), 403
+
+    # Rate limiting по юзеру
+    last_msg = AiMessage.query.filter_by(chat_id=chat_id).filter(
+        AiMessage.role == 'user'
+    ).order_by(AiMessage.timestamp.desc()).first()
+    if last_msg:
+        diff = (datetime.utcnow() - last_msg.timestamp).total_seconds()
+        if diff < GROQ_COOLDOWN_SECONDS:
+            return jsonify({'error': f'Подожди {int(GROQ_COOLDOWN_SECONDS - diff)+1} сек'}), 429
+
+    # Загрузка файла если есть
+    file_url, file_type_val = None, None
+    if file and file.filename:
+        ext = file.filename.rsplit('.', 1)[-1].lower()
+        if ext in ['png', 'jpg', 'jpeg', 'gif', 'webp']:
+            file_url = upload_to_cloud(file, resource_type="image")
+            file_type_val = 'image'
+        else:
+            file_url = upload_to_cloud(file, resource_type="raw")
+            file_type_val = 'file'
+
+    if not content and not file_url:
+        return jsonify({'error': 'Пустое сообщение'}), 400
+
+    # Сохраняем сообщение пользователя
+    user_msg = AiMessage(
+        chat_id=chat_id, role='user',
+        content=content, file_url=file_url, file_type=file_type_val
+    )
+    db.session.add(user_msg)
+
+    # Обновляем заголовок чата (первые слова первого сообщения)
+    if chat.title == 'Новый чат' and content:
+        chat.title = content[:50] + ('…' if len(content) > 50 else '')
+
+    chat.updated_at = datetime.utcnow()
+    db.session.commit()
+
+    # Если чат в режиме админа — ждём ответа вручную
+    if chat.is_admin_mode:
+        return jsonify({
+            'user_msg': {'id': user_msg.id, 'role': 'user', 'content': content,
+                         'file_url': file_url, 'file_type': file_type_val,
+                         'timestamp': user_msg.timestamp.strftime('%H:%M')},
+            'ai_msg': None,
+            'admin_mode': True
+        })
+
+    # Строим историю для Groq
+    history = []
+    for m in chat.messages:
+        if m.role in ('user', 'assistant'):
+            history.append({"role": m.role, "content": m.content or '[файл]'})
+
+    ai_text, error = call_groq_api(history)
+
+    if error == 'timeout' or error == 'rate_limit':
+        ai_text = "⏳ Попробуйте позже — нейросеть сейчас не отвечает. Повтори запрос через минуту."
+    elif error and not ai_text:
+        ai_text = "❌ Произошла ошибка. Попробуй позже."
+
+    ai_msg = AiMessage(chat_id=chat_id, role='assistant', content=ai_text)
+    db.session.add(ai_msg)
+    db.session.commit()
+
+    return jsonify({
+        'user_msg': {'id': user_msg.id, 'role': 'user', 'content': content,
+                     'file_url': file_url, 'file_type': file_type_val,
+                     'timestamp': user_msg.timestamp.strftime('%H:%M')},
+        'ai_msg': {'id': ai_msg.id, 'role': 'assistant', 'content': ai_text,
+                   'timestamp': ai_msg.timestamp.strftime('%H:%M')}
+    })
+
+@app.route('/api/ai/delete_chat/<int:chat_id>', methods=['POST'])
+@login_required
+def ai_delete_chat(chat_id):
+    chat = db.session.get(AiChat, chat_id)
+    if chat and (chat.user_id == current_user.id or current_user.is_admin):
+        db.session.delete(chat)
+        db.session.commit()
+    return jsonify({'ok': True})
+
+# --- ADMIN AI FUNCTIONS ---
+@app.route('/admin/ai_chats')
+@login_required
+def admin_ai_chats():
+    if not current_user.is_admin: abort(403)
+    chats = AiChat.query.order_by(AiChat.updated_at.desc()).all()
+    return render_template('admin_ai_chats.html', chats=chats)
+
+@app.route('/admin/ai_mode/<int:chat_id>', methods=['POST'])
+@login_required
+def admin_ai_toggle_mode(chat_id):
+    if not current_user.is_admin: abort(403)
+    chat = db.session.get(AiChat, chat_id)
+    if chat:
+        chat.is_admin_mode = not chat.is_admin_mode
+        db.session.commit()
+        return jsonify({'is_admin_mode': chat.is_admin_mode})
+    return jsonify({'error': 'Not found'}), 404
+
+@app.route('/admin/ai_reply/<int:chat_id>', methods=['POST'])
+@login_required
+def admin_ai_reply(chat_id):
+    if not current_user.is_admin: abort(403)
+    content = request.form.get('content', '').strip()
+    chat = db.session.get(AiChat, chat_id)
+    if not chat or not content:
+        return jsonify({'error': 'Bad request'}), 400
+    # Сохраняем как 'assistant' чтобы юзер видел как ответ ИИ
+    msg = AiMessage(chat_id=chat_id, role='assistant', content=content)
+    db.session.add(msg)
+    chat.updated_at = datetime.utcnow()
+    db.session.commit()
+    # Уведомить через socketio
+    socketio.emit('ai_message', {
+        'chat_id': chat_id,
+        'role': 'assistant',
+        'content': content,
+        'timestamp': msg.timestamp.strftime('%H:%M')
+    }, to=f"ai_chat_{chat_id}")
+    return jsonify({'ok': True})
+
+@socketio.on('join_ai_chat')
+def on_join_ai_chat(data):
+    chat_id = data.get('chat_id')
+    join_room(f"ai_chat_{chat_id}")
+
 # --- SOCKET.IO ---
 @socketio.on('connect')
 def on_connect():
@@ -4689,6 +5369,29 @@ with app.app_context():
 
             conn.execute(text("ALTER TABLE groups ADD COLUMN IF NOT EXISTS description VARCHAR(300);"))
             conn.execute(text("ALTER TABLE groups ADD COLUMN IF NOT EXISTS is_private BOOLEAN DEFAULT FALSE;"))
+
+            # FontanAI tables
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS ai_chats (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER REFERENCES users(id),
+                    title VARCHAR(200) DEFAULT 'Новый чат',
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW(),
+                    is_admin_mode BOOLEAN DEFAULT FALSE
+                )
+            """))
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS ai_messages (
+                    id SERIAL PRIMARY KEY,
+                    chat_id INTEGER REFERENCES ai_chats(id) ON DELETE CASCADE,
+                    role VARCHAR(20) NOT NULL,
+                    content TEXT,
+                    file_url VARCHAR(300),
+                    file_type VARCHAR(20),
+                    timestamp TIMESTAMP DEFAULT NOW()
+                )
+            """))
             conn.commit()
             print(">>> УСПЕШНО: Колонки добавлены в базу данных! <<<")
     except Exception as e:
