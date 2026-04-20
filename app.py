@@ -149,32 +149,36 @@ from flask_socketio import SocketIO
 
 # --- 1. НАСТРОЙКА БАЗЫ ДАННЫХ ---
 # Прямой URL (порт 5432) — самый надежный путь без пулера
+import os
+import cloudinary
+from sqlalchemy.pool import NullPool
+from flask_sqlalchemy import SQLAlchemy
+from flask_login import LoginManager
+from flask_socketio import SocketIO
+
+# --- 1. НАСТРОЙКА БАЗЫ ДАННЫХ (БЕЗ NEON) ---
+# Прямой URL Supabase (порт 5432) — самый стабильный
 SUPABASE_DIRECT_URL = 'postgresql://postgres.apbtrkzzvnpogpttgbpg:FontanAdmin2026@db.apbtrkzzvnpogpttgbpg.supabase.co:5432/postgres'
 
-# Проверяем внешнюю переменную
+# Получаем переменную из Render
 env_url = os.environ.get('DATABASE_URL', '').strip()
 
-# Если в переменной пусто, или там Neon, или старый адрес — ставим новый Supabase
-if not env_url or 'neon.tech' in env_url or 'aws-0' in env_url:
+# ЖЕСТКАЯ ПРОВЕРКА: если в переменой Neon или старый пулер — принудительно берем Supabase
+if not env_url or 'neon.tech' in env_url or 'pooler' in env_url:
     DATABASE_URL = SUPABASE_DIRECT_URL
 else:
     DATABASE_URL = env_url
 
-# Исправление протокола для SQLAlchemy 2.0+
+# Фикс протокола
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-# Лог в консоль Render для проверки при запуске
-try:
-    print(f">>> ПОДКЛЮЧЕНИЕ К ХОСТУ: {DATABASE_URL.split('@')[-1].split('/')[0]}")
-except:
-    print(">>> ПОДКЛЮЧЕНИЕ К ХОСТУ: ошибка определения")
+# Лог для контроля в Render (увидишь при запуске)
+print(f">>> ПОДКЛЮЧЕНИЕ К ХОСТУ: {DATABASE_URL.split('@')[-1].split('/')[0]}")
 
-# --- 2. КОНФИГУРАЦИЯ FLASK APP ---
+# --- 2. КОНФИГУРАЦИЯ FLASK ---
 app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-
-# Тот самый фикс для стабильности на Render
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     "poolclass": NullPool,
     "connect_args": {
@@ -183,13 +187,13 @@ app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     }
 }
 
-# --- 3. ИНИЦИАЛИЗАЦИЯ РАСШИРЕНИЙ ---
+# --- 3. ИНИЦИАЛИЗАЦИЯ (ТОЛЬКО ОДИН РАЗ!) ---
 db.init_app(app)
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 socketio = SocketIO(app, async_mode='gevent', cors_allowed_origins="*")
 
-# --- 4. CLOUDINARY CONFIG ---
+# --- 4. CLOUDINARY ---
 cloudinary.config(
     cloud_name = 'daz4839e7', 
     api_key = '371541773313745', 
@@ -197,33 +201,22 @@ cloudinary.config(
     secure = True
 )
 
-# --- 5. КОНТЕКСТ ПРИЛОЖЕНИЯ ---
+# --- 5. ЕДИНЫЙ КОНТЕКСТ ПРИЛОЖЕНИЯ ---
 with app.app_context():
     try:
         from sqlalchemy import text
-        # Устанавливаем уровень изоляции для стабильности транзакций
+        # Настройка сессии для работы с пулерами/прямым коннектом
         db.session.execute(text('SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL READ COMMITTED'))
-        db.create_all()
-        print(">>> SUCCESS: База данных Fontan готова к работе!")
-    except Exception as e:
-        print(f">>> DB ERROR (non-critical): {e}")
-# --- 5. СОЗДАНИЕ ТАБЛИЦ И ФИНАЛЬНАЯ НАСТРОЙКА СЕССИИ ---
-with app.app_context():
-    try:
-        from sqlalchemy import text
-        # Этот блок заменяет prepare_threshold и лечит проблемы пулера
-        db.session.execute(text('SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL READ COMMITTED'))
-        # Принудительно отключаем prepared statements на уровне сессии, если база позволит
         try:
             db.session.execute(text('SET statement_timeout = 30000'))
         except:
             pass
-            
+        
+        # Создаем таблицы (если их нет)
         db.create_all()
-        print(">>> SUCCESS: База Supabase (Fontan) успешно подключена!")
+        print(">>> SUCCESS: База данных Fontan (Supabase) полностью готова!")
     except Exception as e:
-        # Если здесь будет "Tenant not found", значит надо сбросить пароль в Supabase
-        print(f">>> DB ERROR: {e}")
+        print(f">>> ОШИБКА ИНИЦИАЛИЗАЦИИ БД: {e}")
 
 # --- Р’РЎРџРћРњРћР“РђРўР•Р›Р¬РќР«Р• Р¤РЈРќРљР¦РР ---
 
@@ -1141,10 +1134,9 @@ def inject_counts():
     return dict(unread_notifications=unread)
 
 @app.before_request
-
 def track_visitor():
     try:
-        # 1. Счётчик общих визитов (SiteStats)
+        # 1. Счётчик общих визитов сайта (SiteStats)
         if not session.get('tracked_visitor'):
             stats = SiteStats.query.first()
             if stats:
@@ -1152,7 +1144,7 @@ def track_visitor():
                 db.session.commit()
                 session['tracked_visitor'] = True
             else:
-                # Если таблицы SiteStats нет или она пуста, создаем запись, чтобы не было ошибок
+                # Если записи еще нет, создаем её
                 try:
                     new_stats = SiteStats(total_visitors=1)
                     db.session.add(new_stats)
@@ -1161,18 +1153,19 @@ def track_visitor():
                 except:
                     db.session.rollback()
 
-        # 2. Счётчик визитов конкретного юзера
+        # 2. Счётчик визитов конкретного пользователя
         if current_user.is_authenticated:
             if not session.get('user_visit_counted'):
+                # Используем (val or 0), чтобы не упасть если в базе NULL
                 current_user.total_visits = (current_user.total_visits or 0) + 1
-                current_user.last_seen = db.func.now() # Заодно обновляем время входа
+                current_user.last_seen = db.func.now()
                 db.session.commit()
                 session['user_visit_counted'] = True
 
     except Exception as e:
         db.session.rollback()
-        # Это самое важное: теперь ошибка в логах будет, но сайт ПРОДОЛЖИТ работать
-        print(f">>> track_visitor error (non-critical): {e}")
+        # Если база недоступна, просто пишем в лог, но сайт НЕ падает
+        print(f">>> [APP LOG] track_visitor non-critical error: {e}")
 
 # Проверка на бан
 
