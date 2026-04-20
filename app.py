@@ -123,40 +123,49 @@ WEBRTC_ICE_SERVERS = [
 
 ]
 
-# --- НАСТРОЙКА БАЗЫ ДАННЫХ (Supabase) ---
+# --- НАСТРОЙКА БАЗЫ ДАННЫХ (Supabase IPv4 Pooler) ---
+# ВАЖНО: Удали переменную DATABASE_URL на Render или замени её на Supabase pooler URL!
+# Supabase IPv4 Transaction Pooler (работает на Render free tier, нет IPv6):
+# postgresql://postgres.apbtrkzzvnpogpttgbpg:PASSWORD@aws-0-us-east-1.pooler.supabase.com:6543/postgres
+# Найти свой URL: Supabase → Project Settings → Database → Transaction pooler
 
-DATABASE_URL = os.environ.get('DATABASE_URL')
+from sqlalchemy.pool import NullPool
 
-if not DATABASE_URL:
-    # Supabase direct connection, port 5432 (IPv4-совместим, работает на Render)
-    DATABASE_URL = 'postgresql://postgres:sb_secret_asJEATw-v0YEQkjbuGP2Ag_OnoWMjtV@db.apbtrkzzvnpogpttgbpg.supabase.co:5432/postgres'
+# Supabase Transaction Pooler URL (IPv4, работает на Render)
+SUPABASE_POOLER_URL = 'postgresql://postgres.apbtrkzzvnpogpttgbpg:sb_secret_asJEATw-v0YEQkjbuGP2Ag_OnoWMjtV@aws-0-us-east-1.pooler.supabase.com:6543/postgres'
+
+DATABASE_URL = os.environ.get('DATABASE_URL', '').strip()
+
+# Если DATABASE_URL не задан, пустой, или указывает на Neon — используем Supabase
+if not DATABASE_URL or 'neon.tech' in DATABASE_URL or 'supabase.co' in DATABASE_URL:
+    if DATABASE_URL and 'neon.tech' in DATABASE_URL:
+        print(">>> ВНИМАНИЕ: Обнаружен старый Neon URL в DATABASE_URL — принудительно переключаюсь на Supabase pooler!")
+    elif DATABASE_URL and 'supabase.co' in DATABASE_URL:
+        print(">>> ВНИМАНИЕ: DATABASE_URL указывает на Supabase direct (IPv6) — переключаюсь на IPv4 pooler!")
+    DATABASE_URL = SUPABASE_POOLER_URL
 
 # Normalize postgres:// -> postgresql://
-if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
+if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
-
-# Если вдруг в DATABASE_URL остался старый Neon URL — заменяем на Supabase
-if DATABASE_URL and 'neon.tech' in DATABASE_URL:
-    print(">>> ВНИМАНИЕ: Обнаружен старый Neon URL — принудительно переключаюсь на Supabase!")
-    DATABASE_URL = 'postgresql://postgres:sb_secret_asJEATw-v0YEQkjbuGP2Ag_OnoWMjtV@db.apbtrkzzvnpogpttgbpg.supabase.co:5432/postgres'
 
 # Для совместимости со старым именем переменной
 NEON_DB_URL = DATABASE_URL
+
+print(f">>> DB HOST: {DATABASE_URL.split('@')[-1].split('/')[0] if '@' in DATABASE_URL else 'unknown'}")
 
 app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
 
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
+# NullPool обязателен для Supabase Transaction Pooler (pgBouncer не держит persistent connections)
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-    "pool_pre_ping": True,
-    "pool_recycle": 300,
-    "pool_size": 5,
-    "max_overflow": 10,
+    "poolclass": NullPool,
     "connect_args": {
         "sslmode": "require",
-        "connect_timeout": 10,
+        "connect_timeout": 15,
     }
 }
+
 
 db.init_app(app)
 
