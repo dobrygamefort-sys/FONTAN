@@ -132,7 +132,7 @@ WEBRTC_ICE_SERVERS = [
 from sqlalchemy.pool import NullPool
 
 # Supabase Transaction Pooler URL (IPv4, работает на Render)
-SUPABASE_POOLER_URL = 'postgresql://postgres.apbtrkzzvnpogpttgbpg:12we1qtr11A!@aws-0-us-east-1.pooler.supabase.com:6543/postgres'
+SUPABASE_POOLER_URL = 'postgresql://postgres.apbtrkzzvnpogpttgbpg:FontanAdmin2026@aws-0-us-east-1.pooler.supabase.com:6543/postgres'
 
 DATABASE_URL = os.environ.get('DATABASE_URL', '').strip()
 
