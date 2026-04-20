@@ -123,23 +123,40 @@ WEBRTC_ICE_SERVERS = [
 
 ]
 
-# --- НАСТРОЙКА БАЗЫ ДАННЫХ ---
+# --- НАСТРОЙКА БАЗЫ ДАННЫХ (Supabase) ---
 
-NEON_DB_URL = os.environ.get('DATABASE_URL')
+DATABASE_URL = os.environ.get('DATABASE_URL')
 
-if not NEON_DB_URL:
+if not DATABASE_URL:
+    # Supabase direct connection, port 5432 (IPv4-совместим, работает на Render)
+    DATABASE_URL = 'postgresql://postgres:sb_secret_asJEATw-v0YEQkjbuGP2Ag_OnoWMjtV@db.apbtrkzzvnpogpttgbpg.supabase.co:5432/postgres'
 
-    NEON_DB_URL = 'postgresql://postgres:sb_secret_asJEATw-v0YEQkjbuGP2Ag_OnoWMjtV@db.apbtrkzzvnpogpttgbpg.supabase.co:6543/postgres' 
+# Normalize postgres:// -> postgresql://
+if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-if NEON_DB_URL and NEON_DB_URL.startswith("postgres://"):
+# Если вдруг в DATABASE_URL остался старый Neon URL — заменяем на Supabase
+if DATABASE_URL and 'neon.tech' in DATABASE_URL:
+    print(">>> ВНИМАНИЕ: Обнаружен старый Neon URL — принудительно переключаюсь на Supabase!")
+    DATABASE_URL = 'postgresql://postgres:sb_secret_asJEATw-v0YEQkjbuGP2Ag_OnoWMjtV@db.apbtrkzzvnpogpttgbpg.supabase.co:5432/postgres'
 
-    NEON_DB_URL = NEON_DB_URL.replace("postgres://", "postgresql://", 1)
+# Для совместимости со старым именем переменной
+NEON_DB_URL = DATABASE_URL
 
-app.config['SQLALCHEMY_DATABASE_URI'] = NEON_DB_URL
+app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
 
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {"pool_pre_ping": True, "pool_recycle": 300, "connect_args": {"sslmode": "require"}}
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    "pool_pre_ping": True,
+    "pool_recycle": 300,
+    "pool_size": 5,
+    "max_overflow": 10,
+    "connect_args": {
+        "sslmode": "require",
+        "connect_timeout": 10,
+    }
+}
 
 db.init_app(app)
 
@@ -1082,27 +1099,35 @@ def inject_counts():
 
 def track_visitor():
 
-    if not session.get('tracked_visitor'):
+    try:
 
-        stats = SiteStats.query.first()
+        if not session.get('tracked_visitor'):
 
-        if stats:
+            stats = SiteStats.query.first()
 
-            stats.total_visitors += 1
+            if stats:
 
-            db.session.commit()
+                stats.total_visitors += 1
 
-        session['tracked_visitor'] = True
+                db.session.commit()
 
-    if current_user.is_authenticated:
+            session['tracked_visitor'] = True
 
-        if not session.get('user_visit_counted'):
+        if current_user.is_authenticated:
 
-            current_user.total_visits = (current_user.total_visits or 0) + 1
+            if not session.get('user_visit_counted'):
 
-            db.session.commit()
+                current_user.total_visits = (current_user.total_visits or 0) + 1
 
-            session['user_visit_counted'] = True
+                db.session.commit()
+
+                session['user_visit_counted'] = True
+
+    except Exception as e:
+
+        db.session.rollback()
+
+        print(f">>> track_visitor error (non-critical): {e}")
 
 # Проверка на бан
 
@@ -1124,37 +1149,45 @@ def update_last_seen():
 
     if current_user.is_authenticated:
 
-        now = datetime.utcnow()
+        try:
 
-        last_sync = session.get('last_seen_sync')
+            now = datetime.utcnow()
 
-        if last_sync:
+            last_sync = session.get('last_seen_sync')
 
-            try:
+            if last_sync:
 
-                if now - datetime.fromisoformat(last_sync) < timedelta(seconds=30):
+                try:
 
-                    return None
+                    if now - datetime.fromisoformat(last_sync) < timedelta(seconds=30):
 
-            except ValueError:
+                        return None
 
-                pass
+                except ValueError:
 
-        current_user.last_seen = now
+                    pass
 
-        token = session.get('session_token')
+            current_user.last_seen = now
 
-        if token:
+            token = session.get('session_token')
 
-            sess = UserSession.query.filter_by(session_token=token, user_id=current_user.id, is_active=True).first()
+            if token:
 
-            if sess:
+                sess = UserSession.query.filter_by(session_token=token, user_id=current_user.id, is_active=True).first()
 
-                sess.last_seen = now
+                if sess:
 
-        session['last_seen_sync'] = now.isoformat()
+                    sess.last_seen = now
 
-        db.session.commit()
+            session['last_seen_sync'] = now.isoformat()
+
+            db.session.commit()
+
+        except Exception as e:
+
+            db.session.rollback()
+
+            print(f">>> update_last_seen error (non-critical): {e}")
 
 # --- Р’РЎРџРћРњРћР“РђРўР•Р›Р¬РќРђРЇ Р¤РЈРќРљР¦РРЇ Р”Р›РЇ Р’Р Р•РњР•РќР ---
 
