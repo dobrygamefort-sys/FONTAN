@@ -158,12 +158,12 @@ print(f">>> DB HOST: {DATABASE_URL.split('@')[-1].split('/')[0] if '@' in DATABA
 app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# Убираем prepare_threshold из connect_args, чтобы не было ошибки DSN
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     "poolclass": NullPool,
     "connect_args": {
         "sslmode": "require",
-        "connect_timeout": 15
+        "connect_timeout": 15,
+        "prepare_threshold": 0  # <--- ДОБАВЬ ЭТУ СТРОКУ СЮДА
     }
 }
 
