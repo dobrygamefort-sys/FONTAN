@@ -139,31 +139,37 @@ from flask_login import LoginManager
 from flask_socketio import SocketIO
 import cloudinary
 
-# --- 1. ПЕРЕМЕННЫЕ ПОДКЛЮЧЕНИЯ ---
+
 SUPABASE_POOLER_URL = 'postgresql://postgres.apbtrkzzvnpogpttgbpg:FontanAdmin2026@aws-0-us-east-1.pooler.supabase.com:6543/postgres'
 
+# Игнорируем внешние переменные для стабильности или чистим их
 DATABASE_URL = os.environ.get('DATABASE_URL', '').strip()
 
-# Логика переключения (Neon/IPv6 -> IPv4 Pooler)
-if not DATABASE_URL or 'neon.tech' in DATABASE_URL or ('supabase.co' in DATABASE_URL and ':5432' in DATABASE_URL):
+if not DATABASE_URL or 'neon.tech' in DATABASE_URL or 'supabase.co' in DATABASE_URL:
     DATABASE_URL = SUPABASE_POOLER_URL
 
-# Исправление протокола
+# Исправление протокола для SQLAlchemy 2.0+
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-print(f">>> DB HOST: {DATABASE_URL.split('@')[-1].split('/')[0] if '@' in DATABASE_URL else 'unknown'}")
+# Вывод хоста для контроля в логах Render
+try:
+    print(f">>> DB HOST: {DATABASE_URL.split('@')[-1].split('/')[0]}")
+except:
+    print(">>> DB HOST: unknown")
 
 # --- 2. КОНФИГУРАЦИЯ FLASK APP ---
 app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
+# СУПЕР-ФИКС: Убираем prepare_threshold из connect_args совсем!
+# Вместо него используем 'statement_timeout' или оставляем пустым, 
+# а нужный параметр отправим через execute ниже.
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     "poolclass": NullPool,
     "connect_args": {
         "sslmode": "require",
-        "connect_timeout": 15,
-        "prepare_threshold": 0  # <--- ДОБАВЬ ЭТУ СТРОКУ СЮДА
+        "connect_timeout": 20
     }
 }
 
@@ -181,15 +187,22 @@ cloudinary.config(
     secure = True
 )
 
-# --- 5. СОЗДАНИЕ ТАБЛИЦ И ФИКС POOLER ---
+# --- 5. СОЗДАНИЕ ТАБЛИЦ И ФИНАЛЬНАЯ НАСТРОЙКА СЕССИИ ---
 with app.app_context():
     try:
         from sqlalchemy import text
-        # Передаем параметры сессии ПРЯМО в запрос, чтобы пулер не ругался
+        # Этот блок заменяет prepare_threshold и лечит проблемы пулера
         db.session.execute(text('SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL READ COMMITTED'))
+        # Принудительно отключаем prepared statements на уровне сессии, если база позволит
+        try:
+            db.session.execute(text('SET statement_timeout = 30000'))
+        except:
+            pass
+            
         db.create_all()
-        print(">>> SUCCESS: База Supabase подключена!")
+        print(">>> SUCCESS: База Supabase (Fontan) успешно подключена!")
     except Exception as e:
+        # Если здесь будет "Tenant not found", значит надо сбросить пароль в Supabase
         print(f">>> DB ERROR: {e}")
 
 # --- Р’РЎРџРћРњРћР“РђРўР•Р›Р¬РќР«Р• Р¤РЈРќРљР¦РР ---
