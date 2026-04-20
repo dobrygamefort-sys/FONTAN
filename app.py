@@ -167,37 +167,48 @@ from flask_socketio import SocketIO
 from flask import session
 
 # 1. СТРОГИЙ URL (IPv4 совместимый)
-SUPABASE_DIRECT_URL = 'postgresql://postgres.apbtrkzzvnpogpttgbpg:FontanAdmin2026@aws-0-us-east-1.pooler.supabase.com:5432/postgres'
+import os
+import cloudinary
+from sqlalchemy.pool import NullPool
+from flask_sqlalchemy import SQLAlchemy
+from flask_login import LoginManager, current_user
+from flask_socketio import SocketIO
+from flask import session
 
+# --- 1. ЖЕСТКАЯ НАСТРОЙКА URL (ПРЯМОЕ ПОДКЛЮЧЕНИЕ) ---
+# ВАЖНО: Используем прямой хост проекта db.apbtrk... и стандартный порт 5432
+# Это обходит капризные пулеры и ошибки "Tenant not found"
+SUPABASE_URL = 'postgresql://postgres.apbtrkzzvnpogpttgbpg:FontanAdmin2026@db.apbtrkzzvnpogpttgbpg.supabase.co:5432/postgres'
+
+# Игнорируем DATABASE_URL из окружения, если там мусор
 env_url = os.environ.get('DATABASE_URL', '').strip()
-if not env_url or 'neon.tech' in env_url or 'aws-0' not in env_url:
-    DATABASE_URL = SUPABASE_DIRECT_URL
+if not env_url or 'neon.tech' in env_url:
+    DATABASE_URL = SUPABASE_URL
 else:
     DATABASE_URL = env_url
 
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-# 2. КОНФИГУРАЦИЯ
+# --- 2. КОНФИГУРАЦИЯ ---
 app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     "poolclass": NullPool,
     "connect_args": {
         "sslmode": "require",
-        "connect_timeout": 30,
-        "gssencmode": "disable" # Фикс для некоторых сетевых ошибок
+        "connect_timeout": 30
     }
 }
 
-# 3. ИНИЦИАЛИЗАЦИЯ
+# --- 3. ИНИЦИАЛИЗАЦИЯ ---
 db.init_app(app)
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 socketio = SocketIO(app, async_mode='gevent', cors_allowed_origins="*")
 
-# 4. CLOUDINARY
+# --- 4. CLOUDINARY ---
 cloudinary.config(
     cloud_name = 'daz4839e7', 
     api_key = '371541773313745', 
@@ -205,19 +216,18 @@ cloudinary.config(
     secure = True
 )
 
-# 5. БЕЗОПАСНЫЙ ЗАПУСК ТАБЛИЦ
-# Оборачиваем всё в try/except внутри контекста
+# --- 5. БЕЗОПАСНЫЙ КОНТЕКСТ (ФИКС "Working outside of application context") ---
+# Мы не вызываем функции, требующие базу, до этого блока
 with app.app_context():
     try:
         from sqlalchemy import text
         print(f">>> ПОДКЛЮЧЕНИЕ К: {DATABASE_URL.split('@')[-1].split('/')[0]}")
-        # Простая проверка связи перед create_all
+        # Проверяем реальный коннект
         db.session.execute(text('SELECT 1'))
         db.create_all()
-        print(">>> SUCCESS: Fontan подключен к Supabase!")
+        print(">>> SUCCESS: Fontan (Supabase) подключен успешно!")
     except Exception as e:
-        print(f">>> DB CONNECTION WARNING: {e}")
-
+        print(f">>> DB WARNING: {e}")
 # --- Р’РЎРџРћРњРћР“РђРўР•Р›Р¬РќР«Р• Р¤РЈРќРљР¦РР ---
 
 def send_verification_code(email):
