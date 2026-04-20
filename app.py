@@ -158,42 +158,46 @@ from flask_socketio import SocketIO
 
 # --- 1. НАСТРОЙКА БАЗЫ ДАННЫХ (БЕЗ NEON) ---
 # Прямой URL Supabase (порт 5432) — самый стабильный
-SUPABASE_DIRECT_URL = 'postgresql://postgres.apbtrkzzvnpogpttgbpg:FontanAdmin2026@db.apbtrkzzvnpogpttgbpg.supabase.co:5432/postgres'
+import os
+import cloudinary
+from sqlalchemy.pool import NullPool
+from flask_sqlalchemy import SQLAlchemy
+from flask_login import LoginManager, current_user
+from flask_socketio import SocketIO
+from flask import session
 
-# Получаем переменную из Render
+# 1. СТРОГИЙ URL (IPv4 совместимый)
+SUPABASE_DIRECT_URL = 'postgresql://postgres.apbtrkzzvnpogpttgbpg:FontanAdmin2026@aws-0-us-east-1.pooler.supabase.com:5432/postgres'
+
 env_url = os.environ.get('DATABASE_URL', '').strip()
-
-# ЖЕСТКАЯ ПРОВЕРКА: если в переменой Neon или старый пулер — принудительно берем Supabase
-if not env_url or 'neon.tech' in env_url or 'pooler' in env_url:
+if not env_url or 'neon.tech' in env_url or 'aws-0' not in env_url:
     DATABASE_URL = SUPABASE_DIRECT_URL
 else:
     DATABASE_URL = env_url
 
-# Фикс протокола
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-# Лог для контроля в Render (увидишь при запуске)
-print(f">>> ПОДКЛЮЧЕНИЕ К ХОСТУ: {DATABASE_URL.split('@')[-1].split('/')[0]}")
-
-# --- 2. КОНФИГУРАЦИЯ FLASK ---
+# 2. КОНФИГУРАЦИЯ
 app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     "poolclass": NullPool,
     "connect_args": {
         "sslmode": "require",
-        "connect_timeout": 30
+        "connect_timeout": 30,
+        "gssencmode": "disable" # Фикс для некоторых сетевых ошибок
     }
 }
 
-# --- 3. ИНИЦИАЛИЗАЦИЯ (ТОЛЬКО ОДИН РАЗ!) ---
+# 3. ИНИЦИАЛИЗАЦИЯ
 db.init_app(app)
+login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 socketio = SocketIO(app, async_mode='gevent', cors_allowed_origins="*")
 
-# --- 4. CLOUDINARY ---
+# 4. CLOUDINARY
 cloudinary.config(
     cloud_name = 'daz4839e7', 
     api_key = '371541773313745', 
@@ -201,22 +205,18 @@ cloudinary.config(
     secure = True
 )
 
-# --- 5. ЕДИНЫЙ КОНТЕКСТ ПРИЛОЖЕНИЯ ---
+# 5. БЕЗОПАСНЫЙ ЗАПУСК ТАБЛИЦ
+# Оборачиваем всё в try/except внутри контекста
 with app.app_context():
     try:
         from sqlalchemy import text
-        # Настройка сессии для работы с пулерами/прямым коннектом
-        db.session.execute(text('SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL READ COMMITTED'))
-        try:
-            db.session.execute(text('SET statement_timeout = 30000'))
-        except:
-            pass
-        
-        # Создаем таблицы (если их нет)
+        print(f">>> ПОДКЛЮЧЕНИЕ К: {DATABASE_URL.split('@')[-1].split('/')[0]}")
+        # Простая проверка связи перед create_all
+        db.session.execute(text('SELECT 1'))
         db.create_all()
-        print(">>> SUCCESS: База данных Fontan (Supabase) полностью готова!")
+        print(">>> SUCCESS: Fontan подключен к Supabase!")
     except Exception as e:
-        print(f">>> ОШИБКА ИНИЦИАЛИЗАЦИИ БД: {e}")
+        print(f">>> DB CONNECTION WARNING: {e}")
 
 # --- Р’РЎРџРћРњРћР“РђРўР•Р›Р¬РќР«Р• Р¤РЈРќРљР¦РР ---
 
