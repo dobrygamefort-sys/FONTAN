@@ -132,63 +132,79 @@ WEBRTC_ICE_SERVERS = [
 from sqlalchemy.pool import NullPool
 
 # Supabase Transaction Pooler URL (IPv4, работает на Render)
+import os
+from sqlalchemy.pool import NullPool
+from flask_sqlalchemy import SQLAlchemy
+from flask_login import LoginManager
+from flask_socketio import SocketIO
+import cloudinary
+
+# --- 1. ПЕРЕМЕННЫЕ ПОДКЛЮЧЕНИЯ ---
 SUPABASE_POOLER_URL = 'postgresql://postgres.apbtrkzzvnpogpttgbpg:FontanAdmin2026@aws-0-us-east-1.pooler.supabase.com:6543/postgres'
 
 DATABASE_URL = os.environ.get('DATABASE_URL', '').strip()
 
-# Если DATABASE_URL не задан, пустой, или указывает на Neon — используем Supabase
-if not DATABASE_URL or 'neon.tech' in DATABASE_URL or 'supabase.co' in DATABASE_URL:
+# Авто-переключение с Neon или прямого Supabase на Pooler
+if not DATABASE_URL or 'neon.tech' in DATABASE_URL or ('supabase.co' in DATABASE_URL and ':5432' in DATABASE_URL):
     if DATABASE_URL and 'neon.tech' in DATABASE_URL:
-        print(">>> ВНИМАНИЕ: Обнаружен старый Neon URL в DATABASE_URL — принудительно переключаюсь на Supabase pooler!")
+        print(">>> ВНИМАНИЕ: Обнаружен старый Neon URL — принудительно переключаюсь на Supabase pooler!")
     elif DATABASE_URL and 'supabase.co' in DATABASE_URL:
-        print(">>> ВНИМАНИЕ: DATABASE_URL указывает на Supabase direct (IPv6) — переключаюсь на IPv4 pooler!")
+        print(">>> ВНИМАНИЕ: DATABASE_URL указывает на IPv6 — переключаюсь на IPv4 pooler!")
     DATABASE_URL = SUPABASE_POOLER_URL
 
-# Normalize postgres:// -> postgresql://
+# Исправление протокола для SQLAlchemy
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-# Для совместимости со старым именем переменной
+# Для совместимости, если где-то в коде используется старое имя
 NEON_DB_URL = DATABASE_URL
 
-print(f">>> DB HOST: {DATABASE_URL.split('@')[-1].split('/')[0] if '@' in DATABASE_URL else 'unknown'}")
+# Отладка хоста в логах Render
+try:
+    current_host = DATABASE_URL.split('@')[-1].split('/')[0]
+    print(f">>> DB HOST: {current_host}")
+except:
+    print(">>> DB HOST: unknown")
 
+# --- 2. КОНФИГУРАЦИЯ FLASK APP ---
 app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
-
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# NullPool обязателен для Supabase Transaction Pooler (pgBouncer не держит persistent connections)
+# Настройки для стабильной работы с пулером Supabase
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     "poolclass": NullPool,
     "connect_args": {
         "sslmode": "require",
         "connect_timeout": 15,
-        "prepare_threshold": 0
+        "prepare_threshold": 0  # Исправляет ошибку 'invalid dsn'
     }
 }
 
-
+# --- 3. ИНИЦИАЛИЗАЦИЯ РАСШИРЕНИЙ ---
 db.init_app(app)
-
 login_manager.init_app(app)
-
 login_manager.login_view = 'login'
 
+# SocketIO с поддержкой gevent (как в твоей строке запуска Gunicorn)
 socketio = SocketIO(app, async_mode='gevent', cors_allowed_origins="*")
 
-# --- CLOUDINARY ---
-
+# --- 4. CLOUDINARY CONFIG ---
 cloudinary.config(
-
     cloud_name = 'daz4839e7', 
-
     api_key = '371541773313745', 
-
     api_secret = 'fumEMY1h-nsFKW8B5BCgix9EN-8',
-
     secure = True
-
 )
+
+# --- 5. СОЗДАНИЕ ТАБЛИЦ ---
+with app.app_context():
+    try:
+        from sqlalchemy import text
+        db.session.execute(text('SELECT 1'))
+        db.create_all()
+        print(">>> SUCCESS: База данных Supabase подключена, таблицы созданы/проверены!")
+    except Exception as e:
+        print(f">>> CRITICAL DB ERROR: {e}")
 
 # --- Р’РЎРџРћРњРћР“РђРўР•Р›Р¬РќР«Р• Р¤РЈРќРљР¦РР ---
 
