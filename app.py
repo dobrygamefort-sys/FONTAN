@@ -129,7 +129,7 @@ NEON_DB_URL = os.environ.get('DATABASE_URL')
 
 if not NEON_DB_URL:
 
-    NEON_DB_URL = 'postgresql://neondb_owner:npg_pIZeE3uY7XLF@ep-shy-field-ahelwpwv-pooler.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require' 
+    NEON_DB_URL = 'postgresql://postgres:sb_secret_asJEATw-v0YEQkjbuGP2Ag_OnoWMjtV@db.apbtrkzzvnpogpttgbpg.supabase.co:5432/postgres' 
 
 if NEON_DB_URL and NEON_DB_URL.startswith("postgres://"):
 
