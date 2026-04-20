@@ -144,39 +144,26 @@ SUPABASE_POOLER_URL = 'postgresql://postgres.apbtrkzzvnpogpttgbpg:FontanAdmin202
 
 DATABASE_URL = os.environ.get('DATABASE_URL', '').strip()
 
-# Авто-переключение с Neon или прямого Supabase на Pooler
+# Логика переключения (Neon/IPv6 -> IPv4 Pooler)
 if not DATABASE_URL or 'neon.tech' in DATABASE_URL or ('supabase.co' in DATABASE_URL and ':5432' in DATABASE_URL):
-    if DATABASE_URL and 'neon.tech' in DATABASE_URL:
-        print(">>> ВНИМАНИЕ: Обнаружен старый Neon URL — принудительно переключаюсь на Supabase pooler!")
-    elif DATABASE_URL and 'supabase.co' in DATABASE_URL:
-        print(">>> ВНИМАНИЕ: DATABASE_URL указывает на IPv6 — переключаюсь на IPv4 pooler!")
     DATABASE_URL = SUPABASE_POOLER_URL
 
-# Исправление протокола для SQLAlchemy
+# Исправление протокола
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-# Для совместимости, если где-то в коде используется старое имя
-NEON_DB_URL = DATABASE_URL
-
-# Отладка хоста в логах Render
-try:
-    current_host = DATABASE_URL.split('@')[-1].split('/')[0]
-    print(f">>> DB HOST: {current_host}")
-except:
-    print(">>> DB HOST: unknown")
+print(f">>> DB HOST: {DATABASE_URL.split('@')[-1].split('/')[0] if '@' in DATABASE_URL else 'unknown'}")
 
 # --- 2. КОНФИГУРАЦИЯ FLASK APP ---
 app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# Настройки для стабильной работы с пулером Supabase
+# Убираем prepare_threshold из connect_args, чтобы не было ошибки DSN
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     "poolclass": NullPool,
     "connect_args": {
         "sslmode": "require",
-        "connect_timeout": 15,
-        "prepare_threshold": 0  # Исправляет ошибку 'invalid dsn'
+        "connect_timeout": 15
     }
 }
 
@@ -184,8 +171,6 @@ app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
 db.init_app(app)
 login_manager.init_app(app)
 login_manager.login_view = 'login'
-
-# SocketIO с поддержкой gevent (как в твоей строке запуска Gunicorn)
 socketio = SocketIO(app, async_mode='gevent', cors_allowed_origins="*")
 
 # --- 4. CLOUDINARY CONFIG ---
@@ -196,15 +181,16 @@ cloudinary.config(
     secure = True
 )
 
-# --- 5. СОЗДАНИЕ ТАБЛИЦ ---
+# --- 5. СОЗДАНИЕ ТАБЛИЦ И ФИКС POOLER ---
 with app.app_context():
     try:
         from sqlalchemy import text
-        db.session.execute(text('SELECT 1'))
+        # Передаем параметры сессии ПРЯМО в запрос, чтобы пулер не ругался
+        db.session.execute(text('SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL READ COMMITTED'))
         db.create_all()
-        print(">>> SUCCESS: База данных Supabase подключена, таблицы созданы/проверены!")
+        print(">>> SUCCESS: База Supabase подключена!")
     except Exception as e:
-        print(f">>> CRITICAL DB ERROR: {e}")
+        print(f">>> DB ERROR: {e}")
 
 # --- Р’РЎРџРћРњРћР“РђРўР•Р›Р¬РќР«Р• Р¤РЈРќРљР¦РР ---
 
