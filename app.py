@@ -163,6 +163,7 @@ app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     "connect_args": {
         "sslmode": "require",
         "connect_timeout": 15,
+        "prepare_threshold": 0
     }
 }
 
