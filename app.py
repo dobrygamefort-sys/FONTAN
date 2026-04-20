@@ -140,36 +140,46 @@ from flask_socketio import SocketIO
 import cloudinary
 
 
-SUPABASE_POOLER_URL = 'postgresql://postgres.apbtrkzzvnpogpttgbpg:FontanAdmin2026@aws-0-us-east-1.pooler.supabase.com:6543/postgres'
+import os
+import cloudinary
+from sqlalchemy.pool import NullPool
+from flask_sqlalchemy import SQLAlchemy
+from flask_login import LoginManager
+from flask_socketio import SocketIO
 
-# Игнорируем внешние переменные для стабильности или чистим их
-DATABASE_URL = os.environ.get('DATABASE_URL', '').strip()
+# --- 1. НАСТРОЙКА БАЗЫ ДАННЫХ ---
+# Прямой URL (порт 5432) — самый надежный путь без пулера
+SUPABASE_DIRECT_URL = 'postgresql://postgres.apbtrkzzvnpogpttgbpg:FontanAdmin2026@db.apbtrkzzvnpogpttgbpg.supabase.co:5432/postgres'
 
-if not DATABASE_URL or 'neon.tech' in DATABASE_URL or 'supabase.co' in DATABASE_URL:
-    DATABASE_URL = SUPABASE_POOLER_URL
+# Проверяем внешнюю переменную
+env_url = os.environ.get('DATABASE_URL', '').strip()
+
+# Если в переменной пусто, или там Neon, или старый адрес — ставим новый Supabase
+if not env_url or 'neon.tech' in env_url or 'aws-0' in env_url:
+    DATABASE_URL = SUPABASE_DIRECT_URL
+else:
+    DATABASE_URL = env_url
 
 # Исправление протокола для SQLAlchemy 2.0+
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-# Вывод хоста для контроля в логах Render
+# Лог в консоль Render для проверки при запуске
 try:
-    print(f">>> DB HOST: {DATABASE_URL.split('@')[-1].split('/')[0]}")
+    print(f">>> ПОДКЛЮЧЕНИЕ К ХОСТУ: {DATABASE_URL.split('@')[-1].split('/')[0]}")
 except:
-    print(">>> DB HOST: unknown")
+    print(">>> ПОДКЛЮЧЕНИЕ К ХОСТУ: ошибка определения")
 
 # --- 2. КОНФИГУРАЦИЯ FLASK APP ---
 app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# СУПЕР-ФИКС: Убираем prepare_threshold из connect_args совсем!
-# Вместо него используем 'statement_timeout' или оставляем пустым, 
-# а нужный параметр отправим через execute ниже.
+# Тот самый фикс для стабильности на Render
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     "poolclass": NullPool,
     "connect_args": {
         "sslmode": "require",
-        "connect_timeout": 20
+        "connect_timeout": 30
     }
 }
 
@@ -187,6 +197,16 @@ cloudinary.config(
     secure = True
 )
 
+# --- 5. КОНТЕКСТ ПРИЛОЖЕНИЯ ---
+with app.app_context():
+    try:
+        from sqlalchemy import text
+        # Устанавливаем уровень изоляции для стабильности транзакций
+        db.session.execute(text('SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL READ COMMITTED'))
+        db.create_all()
+        print(">>> SUCCESS: База данных Fontan готова к работе!")
+    except Exception as e:
+        print(f">>> DB ERROR (non-critical): {e}")
 # --- 5. СОЗДАНИЕ ТАБЛИЦ И ФИНАЛЬНАЯ НАСТРОЙКА СЕССИИ ---
 with app.app_context():
     try:
@@ -1123,35 +1143,35 @@ def inject_counts():
 @app.before_request
 
 def track_visitor():
-
     try:
-
+        # 1. Счётчик общих визитов (SiteStats)
         if not session.get('tracked_visitor'):
-
             stats = SiteStats.query.first()
-
             if stats:
-
-                stats.total_visitors += 1
-
+                stats.total_visitors = (stats.total_visitors or 0) + 1
                 db.session.commit()
+                session['tracked_visitor'] = True
+            else:
+                # Если таблицы SiteStats нет или она пуста, создаем запись, чтобы не было ошибок
+                try:
+                    new_stats = SiteStats(total_visitors=1)
+                    db.session.add(new_stats)
+                    db.session.commit()
+                    session['tracked_visitor'] = True
+                except:
+                    db.session.rollback()
 
-            session['tracked_visitor'] = True
-
+        # 2. Счётчик визитов конкретного юзера
         if current_user.is_authenticated:
-
             if not session.get('user_visit_counted'):
-
                 current_user.total_visits = (current_user.total_visits or 0) + 1
-
+                current_user.last_seen = db.func.now() # Заодно обновляем время входа
                 db.session.commit()
-
                 session['user_visit_counted'] = True
 
     except Exception as e:
-
         db.session.rollback()
-
+        # Это самое важное: теперь ошибка в логах будет, но сайт ПРОДОЛЖИТ работать
         print(f">>> track_visitor error (non-critical): {e}")
 
 # Проверка на бан
