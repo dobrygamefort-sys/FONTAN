@@ -4,8 +4,6 @@ from gevent import monkey
 
 monkey.patch_all()
 
-
-
 # 2. РЎРўРђРќР”РђР РўРќР«Р• Р‘РР‘Р›РРћРўР•РљР
 
 import os
@@ -26,8 +24,6 @@ from urllib.parse import quote_plus
 
 from datetime import datetime, timedelta
 
-
-
 # 3. ОБЛАКО
 
 import cloudinary
@@ -35,8 +31,6 @@ import cloudinary
 import cloudinary.uploader
 
 import cloudinary.api
-
-
 
 # 4. FLASK Р Р РђРЎРЁРР Р•РќРРЇ
 
@@ -48,8 +42,6 @@ from flask_login import LoginManager, UserMixin, login_user, login_required, log
 
 from flask_socketio import SocketIO, emit, join_room, leave_room
 
-
-
 # 5. РРќРЎРўР РЈРњР•РќРўР« Р”РђРќРќР«РҐ
 
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -58,15 +50,11 @@ from sqlalchemy import or_, and_, func, text
 
 import jinja2
 
-
-
 # --- РРќРР¦РРђР›РР—РђР¦РРЇ РћР‘РЄР•РљРўРћР’ ---
 
 db = SQLAlchemy()
 
 login_manager = LoginManager()
-
-
 
 # 1. Получаем путь к папке, где лежит этот app.py
 
@@ -76,8 +64,6 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 
 template_path = os.path.join(current_dir, 'templates')
 
-
-
 # Печатаем в логи для отладки (ты увидишь это в панели Render)
 
 print(f">>> DEBUG: Текущая директория: {current_dir}")
@@ -86,13 +72,9 @@ print(f">>> DEBUG: РС‰Сѓ С€Р°Р±Р»РѕРЅС‹ РІ: {template_pa
 
 print(f">>> DEBUG: Список файлов в templates: {os.listdir(template_path) if os.path.exists(template_path) else 'ПАПКА НЕ НАЙДЕНА'}")
 
-
-
 app = Flask(__name__, template_folder=template_path)
 
 app.config['SECRET_KEY'] = 'fontan_ultra_admin_edition_v9_reset'
-
-
 
 # --- РќРђРЎРўР РћР™РљР РњРћРЎРўРђ (CLOUDFLARE + TELEGRAM) ---
 
@@ -102,21 +84,34 @@ CF_WORKER_URL = "https://fontan.arthur-kgame1.workers.dev"
 
 ADMIN_TG_ID = "1373304655"
 
-
-
 # --- GROQ AI CONFIG ---
 
 GROQ_API_KEY = os.environ.get('GROQ_API_KEY', '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')
 
 GROQ_MODEL = "llama-3.3-70b-versatile"
+AI_DAILY_CREDITS = 40
+AI_MODEL_OPTIONS = {
+    'fast': {
+        'key': 'fast',
+        'label': 'Быстрая',
+        'api_model': os.environ.get('GROQ_FAST_MODEL', 'llama-3.1-8b-instant'),
+        'cost': 1,
+        'hint': 'Быстрый ответ, экономит кредиты'
+    },
+    'smart': {
+        'key': 'smart',
+        'label': 'Думающая',
+        'api_model': os.environ.get('GROQ_SMART_MODEL', GROQ_MODEL),
+        'cost': 3,
+        'hint': 'Думает дольше, пишет надёжнее и умнее'
+    }
+}
 
 GROQ_COOLDOWN_SECONDS = 5   # минимум секунд между запросами от одного юзера
 
 GROQ_TIMEOUT_SECONDS = 30   # если нет ответа за 15с — "попробуй позже"
 
 AI_ADMIN_MODE = {}  # {chat_id: True} — в каком чате админ отвечает сам
-
-
 
 # --- WEBRTC ICE СЕРВЕРЫ (STUN/TURN) ---
 
@@ -128,8 +123,6 @@ WEBRTC_ICE_SERVERS = [
 
 ]
 
-
-
 # --- НАСТРОЙКА БАЗЫ ДАННЫХ ---
 
 NEON_DB_URL = os.environ.get('DATABASE_URL')
@@ -138,21 +131,15 @@ if not NEON_DB_URL:
 
     NEON_DB_URL = 'postgresql://neondb_owner:npg_pIZeE3uY7XLF@ep-shy-field-ahelwpwv-pooler.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require' 
 
-
-
 if NEON_DB_URL and NEON_DB_URL.startswith("postgres://"):
 
     NEON_DB_URL = NEON_DB_URL.replace("postgres://", "postgresql://", 1)
-
-
 
 app.config['SQLALCHEMY_DATABASE_URI'] = NEON_DB_URL
 
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {"pool_pre_ping": True, "pool_recycle": 300, "connect_args": {"sslmode": "require"}}
-
-
 
 db.init_app(app)
 
@@ -161,8 +148,6 @@ login_manager.init_app(app)
 login_manager.login_view = 'login'
 
 socketio = SocketIO(app, async_mode='gevent', cors_allowed_origins="*")
-
-
 
 # --- CLOUDINARY ---
 
@@ -178,11 +163,7 @@ cloudinary.config(
 
 )
 
-
-
 # --- Р’РЎРџРћРњРћР“РђРўР•Р›Р¬РќР«Р• Р¤РЈРќРљР¦РР ---
-
-
 
 def send_verification_code(email):
 
@@ -192,19 +173,13 @@ def send_verification_code(email):
 
     session['temp_email'] = email
 
-    
-
     # РС‰РµРј РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ РІ Р±Р°Р·Рµ
 
     user = User.query.filter_by(email=email).first()
 
-    
-
     # Если у юзера нет ТГ, шлем админу
 
     target_id = user.telegram_id if (user and hasattr(user, 'telegram_id') and user.telegram_id) else ADMIN_TG_ID
-
-
 
     payload = {
 
@@ -213,8 +188,6 @@ def send_verification_code(email):
         "text": f"<b>🔑 Код Fontan</b>\nДля: {email}\nКод: <code>{code}</code>"
 
     }
-
-
 
     try:
 
@@ -226,11 +199,7 @@ def send_verification_code(email):
 
         print(f"\n[DEBUG LOG] КОД: {code}\n")
 
-    
-
     return True
-
-
 
 # --- РРќРР¦РРђР›РР—РђР¦РРЇ Р‘Р” ---
 
@@ -244,17 +213,11 @@ with app.app_context():
 
         pass
 
-
-
 # --- РњРћР”Р•Р›Р Р”РђРќРќР«РҐ ---
-
-
 
 # --- РћРЎРўРђР›Р¬РќР«Р• РљРћРќРЎРўРђРќРўР« Р Р¤РЈРќРљР¦РР ---
 
 MEDIA_EXTENSIONS = ('.mp3', '.wav', '.ogg', '.webm', '.m4a')
-
-
 
 def upload_to_cloud(file_obj, resource_type="auto"):
 
@@ -268,21 +231,74 @@ def upload_to_cloud(file_obj, resource_type="auto"):
 
     except: return None
 
-
-
 def allowed_file(filename):
 
     ALLOWED = {'png', 'jpg', 'jpeg', 'gif', 'mp4', 'webm', 'mp3', 'wav', 'ogg'}
 
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED
 
-
-
 def normalize_text(value):
 
     return re.sub(r'\s+', ' ', (value or '').strip())
 
+def get_ai_model_config(model_key):
 
+    normalized_key = (model_key or 'fast').strip().lower()
+
+    return AI_MODEL_OPTIONS.get(normalized_key, AI_MODEL_OPTIONS['fast'])
+
+def reset_daily_ai_credits(user):
+
+    now = datetime.utcnow()
+
+    if user.ai_credits is None:
+
+        user.ai_credits = AI_DAILY_CREDITS
+
+        user.ai_credits_reset_at = now
+
+        return True
+
+    if not user.ai_credits_reset_at or user.ai_credits_reset_at.date() != now.date():
+
+        user.ai_credits = AI_DAILY_CREDITS
+
+        user.ai_credits_reset_at = now
+
+        return True
+
+    return False
+
+def get_ai_credit_state(user, commit=False):
+
+    changed = reset_daily_ai_credits(user)
+
+    if commit and changed:
+
+        db.session.commit()
+
+    return {
+        'balance': max(0, int(user.ai_credits or 0)),
+        'limit': AI_DAILY_CREDITS,
+    }
+
+def spend_ai_credits(user, amount):
+
+    reset_daily_ai_credits(user)
+
+    current_balance = int(user.ai_credits or 0)
+
+    if amount > current_balance:
+
+        return False
+
+    user.ai_credits = current_balance - amount
+
+    if not user.ai_credits_reset_at:
+
+        user.ai_credits_reset_at = datetime.utcnow()
+
+    return True
 
 def consume_idempotency_token(scope, token, ttl_seconds=1800):
 
@@ -291,8 +307,6 @@ def consume_idempotency_token(scope, token, ttl_seconds=1800):
     if not token:
 
         return True
-
-
 
     now_ts = int(datetime.utcnow().timestamp())
 
@@ -310,8 +324,6 @@ def consume_idempotency_token(scope, token, ttl_seconds=1800):
 
         return False
 
-
-
     scope_items.append({'token': token, 'ts': now_ts})
 
     idempotency[scope] = scope_items[-30:]
@@ -322,8 +334,6 @@ def consume_idempotency_token(scope, token, ttl_seconds=1800):
 
     return True
 
-
-
 def recent_duplicate_signature(scope, signature, ttl_seconds=12):
 
     signature = (signature or '').strip()
@@ -331,8 +341,6 @@ def recent_duplicate_signature(scope, signature, ttl_seconds=12):
     if not signature:
 
         return False
-
-
 
     now_ts = int(datetime.utcnow().timestamp())
 
@@ -356,8 +364,6 @@ def recent_duplicate_signature(scope, signature, ttl_seconds=12):
 
         return True
 
-
-
     scope_items.append({'sig': signature, 'ts': now_ts})
 
     recent[scope] = scope_items[-20:]
@@ -368,8 +374,6 @@ def recent_duplicate_signature(scope, signature, ttl_seconds=12):
 
     return False
 
-
-
 def find_media_asset(asset_name):
 
     candidates = [asset_name]
@@ -377,8 +381,6 @@ def find_media_asset(asset_name):
     if not Path(asset_name).suffix:
 
         candidates.extend([f'{asset_name}{ext}' for ext in MEDIA_EXTENSIONS])
-
-
 
     search_roots = [
 
@@ -402,8 +404,6 @@ def find_media_asset(asset_name):
 
     return None
 
-
-
 # --- AI РњРћР”Р•Р РђР¦РРЇ РљРћРќРўР•РќРўРђ ---
 
 def moderate_content(text):
@@ -413,8 +413,6 @@ def moderate_content(text):
     if not text:
 
         return True, ""
-
-    
 
     forbidden_words = [
 
@@ -428,8 +426,6 @@ def moderate_content(text):
 
     ]
 
-    
-
     text_lower = text.lower()
 
     for word in forbidden_words:
@@ -438,8 +434,6 @@ def moderate_content(text):
 
             return False, f"Обнаружено запрещённое слово: {word}"
 
-
-
     # Эвристики: слишком много ссылок/капса/повторов
 
     links = len(re.findall(r'(https?://|www\.)', text_lower))
@@ -447,8 +441,6 @@ def moderate_content(text):
     if links >= 3:
 
         return False, "Слишком много ссылок"
-
-
 
     letters = re.findall(r'[a-zа-я]', text_lower)
 
@@ -460,21 +452,13 @@ def moderate_content(text):
 
             return False, "Слишком много капса"
 
-
-
     if len(text) > 4000:
 
         return False, "Слишком длинный текст"
 
-    
-
     return True, ""
 
-
-
 # --- РњРћР”Р•Р›Р Р‘РђР—Р« Р”РђРќРќР«РҐ ---
-
-
 
 group_members = db.Table('group_members',
 
@@ -483,8 +467,6 @@ group_members = db.Table('group_members',
     db.Column('group_id', db.Integer, db.ForeignKey('groups.id'), primary_key=True)
 
 )
-
-
 
 class User(UserMixin, db.Model):
 
@@ -512,8 +494,6 @@ class User(UserMixin, db.Model):
 
     last_seen = db.Column(db.DateTime, default=datetime.utcnow)
 
-    
-
     # Поля админа
 
     is_admin = db.Column(db.Boolean, default=False)
@@ -531,16 +511,14 @@ class User(UserMixin, db.Model):
     total_visits = db.Column(db.Integer, default=0)
 
     telegram_id = db.Column(db.String(100), nullable=True)
-
-
+    ai_credits = db.Column(db.Integer, default=AI_DAILY_CREDITS)
+    ai_credits_reset_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     posts = db.relationship('Post', backref='author', lazy=True, foreign_keys='Post.user_id')
 
     likes = db.relationship('Like', backref='user', lazy=True)
 
     groups = db.relationship('Group', secondary=group_members, backref=db.backref('members', lazy='dynamic'))
-
-    
 
     # Подписки (вайбики)
 
@@ -572,8 +550,6 @@ class User(UserMixin, db.Model):
 
     )
 
-
-
 class Follow(db.Model):
 
     __tablename__ = 'follows'
@@ -586,8 +562,6 @@ class Follow(db.Model):
 
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
 
-
-
 class Friendship(db.Model):
 
     __tablename__ = 'friendships'
@@ -599,8 +573,6 @@ class Friendship(db.Model):
     receiver_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
 
     status = db.Column(db.String(20), default='pending') 
-
-
 
 class Group(db.Model):
 
@@ -615,8 +587,6 @@ class Group(db.Model):
     is_private = db.Column(db.Boolean, default=False)
 
     creator_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-
-
 
 class Message(db.Model):
 
@@ -650,8 +620,6 @@ class Message(db.Model):
 
     sender = db.relationship('User', foreign_keys=[sender_id])
 
-
-
 class Like(db.Model):
 
     __tablename__ = 'likes'
@@ -662,8 +630,6 @@ class Like(db.Model):
 
     post_id = db.Column(db.Integer, db.ForeignKey('posts.id'), nullable=False)
 
-
-
 class PostView(db.Model):
 
     __tablename__ = 'post_views'
@@ -673,8 +639,6 @@ class PostView(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
 
     post_id = db.Column(db.Integer, db.ForeignKey('posts.id'), nullable=False)
-
-
 
 class Comment(db.Model):
 
@@ -696,8 +660,6 @@ class Comment(db.Model):
 
     author = db.relationship('User', backref='comments')
 
-
-
 class Poll(db.Model):
 
     __tablename__ = 'polls'
@@ -712,8 +674,6 @@ class Poll(db.Model):
 
     votes = db.Column(db.Text, default='{}')  # JSON строка с голосами
 
-
-
 class PollVote(db.Model):
 
     __tablename__ = 'poll_votes'
@@ -727,8 +687,6 @@ class PollVote(db.Model):
     option_index = db.Column(db.Integer, nullable=False)
 
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
-
-
 
 class Post(db.Model):
 
@@ -760,8 +718,6 @@ class Post(db.Model):
 
     client_token = db.Column(db.String(80), nullable=True)
 
-    
-
     comments_rel = db.relationship('Comment', backref='post', cascade="all, delete-orphan", lazy=True)
 
     likes_rel = db.relationship('Like', backref='post', cascade="all, delete-orphan", lazy=True)
@@ -774,8 +730,6 @@ class Post(db.Model):
 
     co_author = db.relationship('User', foreign_keys=[co_author_id])
 
-
-
 class PostMedia(db.Model):
 
     __tablename__ = 'post_media'
@@ -787,8 +741,6 @@ class PostMedia(db.Model):
     media_url = db.Column(db.String(300), nullable=False)
 
     media_type = db.Column(db.String(20), nullable=False)  # image | video
-
-
 
 class Notification(db.Model):
 
@@ -810,8 +762,6 @@ class Notification(db.Model):
 
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
 
-
-
 class Report(db.Model):
 
     __tablename__ = 'reports'
@@ -829,8 +779,6 @@ class Report(db.Model):
     status = db.Column(db.String(30), default='open')
 
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
-
-
 
 class Story(db.Model):
 
@@ -850,8 +798,6 @@ class Story(db.Model):
 
     author = db.relationship('User', foreign_keys=[user_id])
 
-
-
 class StoryView(db.Model):
 
     __tablename__ = 'story_views'
@@ -863,8 +809,6 @@ class StoryView(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
 
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
-
-
 
 class UserSession(db.Model):
 
@@ -888,8 +832,6 @@ class UserSession(db.Model):
 
     is_active = db.Column(db.Boolean, default=True)
 
-
-
 class FluxVideo(db.Model):
 
     __tablename__ = 'flux_videos'
@@ -910,8 +852,6 @@ class FluxVideo(db.Model):
 
     author = db.relationship('User', backref='flux_videos')
 
-
-
 class FluxLike(db.Model):
 
     __tablename__ = 'flux_likes'
@@ -921,8 +861,6 @@ class FluxLike(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
 
     video_id = db.Column(db.Integer, db.ForeignKey('flux_videos.id'), nullable=False)
-
-
 
 class FluxComment(db.Model):
 
@@ -940,8 +878,6 @@ class FluxComment(db.Model):
 
     author = db.relationship('User', backref='flux_comments')
 
-
-
 class SiteStats(db.Model):
 
     __tablename__ = 'site_stats'
@@ -951,8 +887,6 @@ class SiteStats(db.Model):
     total_visitors = db.Column(db.Integer, default=0)
 
     peak_online = db.Column(db.Integer, default=0)
-
-
 
 class AiChat(db.Model):
 
@@ -974,8 +908,6 @@ class AiChat(db.Model):
 
     messages = db.relationship('AiMessage', backref='chat', cascade='all, delete-orphan', order_by='AiMessage.timestamp')
 
-
-
 class AiMessage(db.Model):
 
     __tablename__ = 'ai_messages'
@@ -993,12 +925,6 @@ class AiMessage(db.Model):
     file_type = db.Column(db.String(20), nullable=True)
 
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
-
-
-
-
-
-
 
 def ensure_user_sessions_schema():
 
@@ -1022,8 +948,6 @@ def ensure_user_sessions_schema():
 
             db.session.execute(text("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE"))
 
-            
-
             # 2. Таблица notifications
 
             db.session.execute(text("ALTER TABLE notifications ADD COLUMN IF NOT EXISTS ntype VARCHAR(50) DEFAULT 'system'"))
@@ -1038,15 +962,11 @@ def ensure_user_sessions_schema():
 
             db.session.execute(text("ALTER TABLE notifications ALTER COLUMN type SET DEFAULT 'system'"))
 
-            
-
             # 3. Таблица stories
 
             db.session.execute(text("ALTER TABLE stories ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"))
 
             db.session.execute(text("ALTER TABLE stories ADD COLUMN IF NOT EXISTS media_type VARCHAR(50) DEFAULT 'image'"))
-
-
 
             # 4. РўРђР‘Р›РР¦Рђ REPORTS (РСЃРїСЂР°РІР»СЏРµРј РІР°С€Сѓ РЅРѕРІСѓСЋ РѕС€РёР±РєСѓ)
 
@@ -1060,8 +980,6 @@ def ensure_user_sessions_schema():
 
             db.session.execute(text("ALTER TABLE reports ADD COLUMN IF NOT EXISTS timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP"))
 
-
-
             # 6. Flux
 
             db.session.execute(text("CREATE TABLE IF NOT EXISTS flux_videos (id SERIAL PRIMARY KEY, user_id INTEGER, video_url VARCHAR(300), description TEXT, likes INTEGER DEFAULT 0, views INTEGER DEFAULT 0, timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(user_id) REFERENCES users(id))"))
@@ -1071,8 +989,6 @@ def ensure_user_sessions_schema():
             db.session.execute(text("CREATE TABLE IF NOT EXISTS flux_likes (id SERIAL PRIMARY KEY, user_id INTEGER, video_id INTEGER, FOREIGN KEY(user_id) REFERENCES users(id), FOREIGN KEY(video_id) REFERENCES flux_videos(id))"))
 
             db.session.execute(text("CREATE TABLE IF NOT EXISTS flux_comments (id SERIAL PRIMARY KEY, user_id INTEGER, video_id INTEGER, text TEXT, timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(user_id) REFERENCES users(id), FOREIGN KEY(video_id) REFERENCES flux_videos(id))"))
-
-
 
             # 7. Analytics
 
@@ -1092,10 +1008,6 @@ def ensure_user_sessions_schema():
 
                 db.session.execute(text("INSERT INTO site_stats (total_visitors, peak_online) VALUES (0, 0)"))
 
-
-
-
-
             # 5. Сообщения
 
             db.session.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS read_at TIMESTAMP"))
@@ -1108,8 +1020,6 @@ def ensure_user_sessions_schema():
 
             db.session.execute(text("ALTER TABLE posts ADD COLUMN IF NOT EXISTS client_token VARCHAR(80)"))
 
-
-
             db.session.commit()
 
             print(">>> БАЗА ДАННЫХ ПОЛНОСТЬЮ ОБНОВЛЕНА: Жалобы, уведомления и сессии в порядке! <<<")
@@ -1119,8 +1029,6 @@ def ensure_user_sessions_schema():
         print(f"Schema check failed: {e}")
 
         db.session.rollback()
-
-
 
 class GroupRole(db.Model):
 
@@ -1133,8 +1041,6 @@ class GroupRole(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
 
     role = db.Column(db.String(30), default='member')  # admin, moderator, editor, member
-
-
 
 class GroupJoinRequest(db.Model):
 
@@ -1150,19 +1056,13 @@ class GroupJoinRequest(db.Model):
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-
-
 ensure_user_sessions_schema()
-
-
 
 @login_manager.user_loader
 
 def load_user(user_id):
 
     return db.session.get(User, int(user_id))
-
-
 
 @app.context_processor
 
@@ -1177,8 +1077,6 @@ def inject_counts():
         unread = 0
 
     return dict(unread_notifications=unread)
-
-
 
 @app.before_request
 
@@ -1196,8 +1094,6 @@ def track_visitor():
 
         session['tracked_visitor'] = True
 
-    
-
     if current_user.is_authenticated:
 
         if not session.get('user_visit_counted'):
@@ -1207,8 +1103,6 @@ def track_visitor():
             db.session.commit()
 
             session['user_visit_counted'] = True
-
-
 
 # Проверка на бан
 
@@ -1223,8 +1117,6 @@ def check_ban():
         flash("Ваш аккаунт заблокирован администрацией.", "danger")
 
         return redirect(url_for('login'))
-
-
 
 @app.before_request
 
@@ -1248,8 +1140,6 @@ def update_last_seen():
 
                 pass
 
-
-
         current_user.last_seen = now
 
         token = session.get('session_token')
@@ -1266,8 +1156,6 @@ def update_last_seen():
 
         db.session.commit()
 
-
-
 # --- Р’РЎРџРћРњРћР“РђРўР•Р›Р¬РќРђРЇ Р¤РЈРќРљР¦РРЇ Р”Р›РЇ Р’Р Р•РњР•РќР ---
 
 def time_ago(dt):
@@ -1278,11 +1166,7 @@ def time_ago(dt):
 
     diff = now - dt
 
-    
-
     seconds = diff.total_seconds()
-
-    
 
     if seconds < 60:
 
@@ -1310,11 +1194,7 @@ def time_ago(dt):
 
         return dt.strftime('%d.%m.%Y в %H:%M')
 
-
-
 app.jinja_env.filters['time_ago'] = time_ago
-
-
 
 # --- КАПЧА ---
 
@@ -1336,13 +1216,9 @@ def generate_captcha():
 
     return question
 
-
-
 def validate_captcha(user_answer):
 
     return user_answer and session.get('captcha_a') == str(user_answer).strip()
-
-
 
 # --- РЈРџРћРњРРќРђРќРРЇ Р РҐР­РЁРўР•Р“Р ---
 
@@ -1370,8 +1246,6 @@ def linkify_text(text):
 
     return text
 
-
-
 app.jinja_env.filters['linkify'] = linkify_text
 
 def safe_from_json(value):
@@ -1390,8 +1264,6 @@ def safe_from_json(value):
 
         return [] if raw.startswith('[') else {}
 
-
-
 def create_notification(user_id, ntype, message=None, link=None, from_user_id=None):
 
     try:
@@ -1406,8 +1278,6 @@ def create_notification(user_id, ntype, message=None, link=None, from_user_id=No
 
         print(f"notify error: {e}")
 
-
-
 def get_client_ip():
 
     ip = request.headers.get('X-Forwarded-For', request.remote_addr)
@@ -1417,8 +1287,6 @@ def get_client_ip():
         ip = ip.split(',')[0].strip()
 
     return ip
-
-
 
 def guess_city(ip):
 
@@ -1432,8 +1300,6 @@ def guess_city(ip):
 
     return None
 
-
-
 def get_room(chat_type, chat_id, user_id):
 
     if chat_type == 'private':
@@ -1444,8 +1310,6 @@ def get_room(chat_type, chat_id, user_id):
 
     return f"group_{chat_id}"
 
-
-
 @app.route('/media_asset/<asset_name>')
 
 def media_asset(asset_name):
@@ -1454,19 +1318,13 @@ def media_asset(asset_name):
 
         abort(404)
 
-
-
     file_path = find_media_asset(asset_name)
 
     if not file_path:
 
         abort(404)
 
-
-
     return send_from_directory(str(file_path.parent), file_path.name, conditional=True)
-
-
 
 # --- ШАБЛОНЫ ---
 
@@ -1533,8 +1391,6 @@ templates = {
             --accent: #4f46e5;
 
         }
-
-
 
         :root[data-color="blue"] { --accent: #2563eb; }
 
@@ -1940,8 +1796,6 @@ templates = {
 
         }
 
-
-
         .online-dot {
 
             width: 10px;
@@ -1962,8 +1816,6 @@ templates = {
 
         }
 
-
-
         .story-item {
 
             width: 80px;
@@ -1971,8 +1823,6 @@ templates = {
             text-align: center;
 
         }
-
-
 
         .story-avatar {
 
@@ -1989,8 +1839,6 @@ templates = {
             margin: 0 auto 6px;
 
         }
-
-
 
         .lightbox {
 
@@ -2010,8 +1858,6 @@ templates = {
 
         }
 
-
-
         .lightbox img, .lightbox video {
 
             max-width: 90vw;
@@ -2021,8 +1867,6 @@ templates = {
             border-radius: 12px;
 
         }
-
-
 
         .like-pop {
 
@@ -2035,8 +1879,6 @@ templates = {
             animation: pop 0.7s ease-out forwards;
 
         }
-
-
 
         @keyframes pop {
 
@@ -2222,8 +2064,6 @@ templates = {
 
         }
 
-
-
         function initIdempotentForms(root = document) {
 
             root.querySelectorAll('form.js-idempotent-form').forEach(form => {
@@ -2294,8 +2134,6 @@ templates = {
 
         });
 
-
-
         function openLightbox(url, type) {
 
             const lb = document.getElementById('lightbox');
@@ -2318,8 +2156,6 @@ templates = {
 
         }
 
-
-
         function closeLightbox() {
 
             const lb = document.getElementById('lightbox');
@@ -2331,8 +2167,6 @@ templates = {
             lb.style.display = 'none';
 
         }
-
-
 
         function likePop(e, postId) {
 
@@ -2354,8 +2188,6 @@ templates = {
 
         }
 
-
-
         function sharePost(url) {
 
             const full = window.location.origin + url;
@@ -2372,8 +2204,6 @@ templates = {
 
         }
 
-
-
         function editPost(postId) {
 
             const text = prompt('Новый текст поста');
@@ -2387,8 +2217,6 @@ templates = {
             fetch(`/edit_post/${postId}`, { method: 'POST', body: formData }).then(() => location.reload());
 
         }
-
-
 
         {% if current_user.is_authenticated %}
 
@@ -2443,8 +2271,6 @@ templates = {
 </html>
 
     """,
-
-
 
     'index.html': """
 
@@ -2522,8 +2348,6 @@ templates = {
 
     </div>
 
-
-
     <div class="col-md-6">
 
         <div class="card p-3 mb-3">
@@ -2575,8 +2399,6 @@ templates = {
             </div>
 
         </div>
-
-
 
         <div class="card p-3">
 
@@ -2648,8 +2470,6 @@ templates = {
 
         </div>
 
-
-
         <div id="posts-container">
 
             {% for post in posts %}
@@ -2684,8 +2504,6 @@ templates = {
 
 </div>
 
-
-
 <script>
 
 let pollOptionCount = 2;
@@ -2696,8 +2514,6 @@ let currentPage = 1;
 
 let hasMore = true;
 
-
-
 function togglePoll() {
 
     const pollSection = document.getElementById('poll-section');
@@ -2705,8 +2521,6 @@ function togglePoll() {
     pollSection.style.display = pollSection.style.display === 'none' ? 'block' : 'none';
 
 }
-
-
 
 function addPollOption() {
 
@@ -2732,8 +2546,6 @@ function addPollOption() {
 
 }
 
-
-
 // Ленивая подгрузка постов
 
 window.addEventListener('scroll', function() {
@@ -2757,8 +2569,6 @@ window.addEventListener('scroll', function() {
     }
 
 });
-
-
 
 function loadMorePosts() {
 
@@ -2822,8 +2632,6 @@ function loadMorePosts() {
 
 }
 
-
-
 document.querySelectorAll('.btn-record-comment').forEach(btn => {
 
     let mediaRecorder;
@@ -2831,8 +2639,6 @@ document.querySelectorAll('.btn-record-comment').forEach(btn => {
     let audioChunks = [];
 
     let isRecording = false;
-
-
 
     btn.addEventListener('click', async () => {
 
@@ -2888,8 +2694,6 @@ document.querySelectorAll('.btn-record-comment').forEach(btn => {
 
 });
 
-
-
 function votePoll(pollId, optionIndex) {
 
     fetch(`/vote_poll/${pollId}/${optionIndex}`, { method: 'POST' })
@@ -2917,8 +2721,6 @@ function votePoll(pollId, optionIndex) {
 {% endblock %}
 
     """,
-
-
 
     'post_card.html': """
 
@@ -3122,8 +2924,6 @@ function votePoll(pollId, optionIndex) {
 
     </div>
 
-
-
     <div class="d-flex align-items-center justify-content-between mt-3 pt-2 border-top">
 
         <div class="d-flex gap-4">
@@ -3163,8 +2963,6 @@ function votePoll(pollId, optionIndex) {
         </div>
 
     </div>
-
-
 
     <div class="mt-3 bg-light p-2 rounded-3">
 
@@ -3237,8 +3035,6 @@ function votePoll(pollId, optionIndex) {
 </div>
 
     """,
-
-
 
     'my_vibers.html': """
 
@@ -3326,8 +3122,6 @@ function votePoll(pollId, optionIndex) {
 
     """,
 
-
-
     'friends.html': """
 
 {% extends "base.html" %}
@@ -3391,8 +3185,6 @@ function votePoll(pollId, optionIndex) {
 {% endblock %}
 
     """,
-
-
 
     'messenger.html': """
 
@@ -3473,8 +3265,6 @@ function votePoll(pollId, optionIndex) {
             </div>
 
         </div>
-
-
 
         <div class="col-md-8 h-100 d-flex flex-column position-relative" style="background-color: var(--card-bg);">
 
@@ -3618,8 +3408,6 @@ function votePoll(pollId, optionIndex) {
 
 </div>
 
-
-
 <div class="modal fade" id="createGroupModal" tabindex="-1">
 
     <div class="modal-dialog">
@@ -3699,8 +3487,6 @@ function votePoll(pollId, optionIndex) {
     </div>
 
 </div>
-
-
 
 {% if active_chat %}
 
@@ -3806,8 +3592,6 @@ function votePoll(pollId, optionIndex) {
 
     const CALL_CONNECT_TIMEOUT_MS = 25000;
 
-
-
     try {
 
         const pendingIncomingCall = JSON.parse(sessionStorage.getItem('pendingIncomingCall') || 'null');
@@ -3874,8 +3658,6 @@ function votePoll(pollId, optionIndex) {
 
     }
 
-
-
     function persistCallState() {
 
         if (!activeCall) return;
@@ -3910,8 +3692,6 @@ function votePoll(pollId, optionIndex) {
 
     }
 
-
-
     function clearCallState() {
 
         try {
@@ -3928,8 +3708,6 @@ function votePoll(pollId, optionIndex) {
 
     }
 
-
-
     function clearConnectTimeout() {
 
         if (callConnectTimeout) {
@@ -3942,8 +3720,6 @@ function votePoll(pollId, optionIndex) {
 
     }
 
-
-
     function clearDisconnectTimeout() {
 
         if (callDisconnectTimeout) {
@@ -3955,8 +3731,6 @@ function votePoll(pollId, optionIndex) {
         }
 
     }
-
-
 
     function startConnectTimeout() {
 
@@ -3973,8 +3747,6 @@ function votePoll(pollId, optionIndex) {
         }, CALL_CONNECT_TIMEOUT_MS);
 
     }
-
-
 
     function scheduleDisconnectRecovery() {
 
@@ -3994,8 +3766,6 @@ function votePoll(pollId, optionIndex) {
 
     }
 
-
-
     function escapeHtml(value) {
 
         return (value || '').replace(/[&<>\"']/g, char => ({
@@ -4014,19 +3784,13 @@ function votePoll(pollId, optionIndex) {
 
     }
 
-
-
     function generateToken() {
 
         return window.generateActionToken ? window.generateActionToken() : `msg_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 
     }
 
-
-
     const roomId = chatType === 'private' ? `private_${Math.min({{ current_user.id }}, chatId)}_${Math.max({{ current_user.id }}, chatId)}` : `group_${chatId}`;
-
-
 
     async function sendMessage(text, voiceBlob = null) {
 
@@ -4045,8 +3809,6 @@ function votePoll(pollId, optionIndex) {
         if (trimmedText) formData.append('body', trimmedText);
 
         if (voiceBlob) formData.append('voice', voiceBlob, 'voice.webm');
-
-
 
         try {
 
@@ -4080,8 +3842,6 @@ function votePoll(pollId, optionIndex) {
 
     }
 
-
-
     sendBtn.addEventListener('click', () => {
 
         if (msgInput.value) sendMessage(msgInput.value);
@@ -4100,8 +3860,6 @@ function votePoll(pollId, optionIndex) {
 
     });
 
-
-
     emojiBtn.addEventListener('click', () => {
 
         const emoji = prompt('Р­РјРѕРґР·Рё (РЅР°РїСЂРёРјРµСЂ рџ„рџ”Ґвќ¤пёЏ)');
@@ -4112,15 +3870,11 @@ function votePoll(pollId, optionIndex) {
 
     });
 
-
-
     let mediaRecorder;
 
     let audioChunks = [];
 
     let isRecording = false;
-
-
 
     recordBtn.addEventListener('click', async () => {
 
@@ -4167,8 +3921,6 @@ function votePoll(pollId, optionIndex) {
         }
 
     });
-
-
 
     async function loadMessages() {
 
@@ -4234,8 +3986,6 @@ function votePoll(pollId, optionIndex) {
 
                     }
 
-
-
                     div.className = `d-flex flex-column ${isMe ? 'align-items-end' : 'align-items-start'} mb-2`;
 
                     div.innerHTML = `${senderHtml}<div class="msg-bubble ${isMe ? 'msg-sent' : 'msg-received'}">${contentHtml}<div class="text-muted small text-end">${msg.edited_at ? 'изменено' : ''} ${status}</div></div>${actionsHtml}`;
@@ -4282,8 +4032,6 @@ function votePoll(pollId, optionIndex) {
 
     let typingTimeout = null;
 
-
-
     socket.on('connect', () => {
 
         socket.emit('join', { room: roomId });
@@ -4322,8 +4070,6 @@ function votePoll(pollId, optionIndex) {
 
     });
 
-
-
     socket.on('message', (data) => {
 
         if (data.room_id === roomId) {
@@ -4333,8 +4079,6 @@ function votePoll(pollId, optionIndex) {
         }
 
     });
-
-
 
     socket.on('typing', (data) => {
 
@@ -4352,15 +4096,11 @@ function votePoll(pollId, optionIndex) {
 
     });
 
-
-
     document.getElementById('msg-input')?.addEventListener('input', () => {
 
         socket.emit('typing', { room_id: roomId, user_id: currentUserId });
 
     });
-
-
 
     function stopRingtones() {
 
@@ -4375,8 +4115,6 @@ function votePoll(pollId, optionIndex) {
         });
 
     }
-
-
 
     function setCallIdentity(user) {
 
@@ -4395,8 +4133,6 @@ function votePoll(pollId, optionIndex) {
         }
 
     }
-
-
 
     function showCallOverlay(mode, statusText, user) {
 
@@ -4424,8 +4160,6 @@ function votePoll(pollId, optionIndex) {
 
     }
 
-
-
     function hideCallOverlay() {
 
         if (!callOverlay) return;
@@ -4451,8 +4185,6 @@ function votePoll(pollId, optionIndex) {
         localPreview.srcObject = null;
 
     }
-
-
 
     if (activeCall) {
 
@@ -4480,8 +4212,6 @@ function votePoll(pollId, optionIndex) {
 
     }
 
-
-
     function startCallClock() {
 
         clearConnectTimeout();
@@ -4506,8 +4236,6 @@ function votePoll(pollId, optionIndex) {
 
     }
 
-
-
     function stopCallClock() {
 
         clearInterval(callTimerInterval);
@@ -4517,8 +4245,6 @@ function votePoll(pollId, optionIndex) {
         callStartedAt = null;
 
     }
-
-
 
     async function ensureLocalStream(options = { audio: true, video: false }) {
 
@@ -4548,8 +4274,6 @@ function votePoll(pollId, optionIndex) {
 
     }
 
-
-
     async function ensurePeerConnection() {
 
         if (peerConnection) return peerConnection;
@@ -4559,8 +4283,6 @@ function votePoll(pollId, optionIndex) {
         remoteStream = new MediaStream();
 
         remoteMedia.srcObject = remoteStream;
-
-
 
         peerConnection.onicecandidate = (event) => {
 
@@ -4636,8 +4358,6 @@ function votePoll(pollId, optionIndex) {
 
     }
 
-
-
     async function sendOffer() {
 
         await ensurePeerConnection();
@@ -4649,8 +4369,6 @@ function votePoll(pollId, optionIndex) {
         socket.emit('call_signal', { to_user_id: activeCall.peerId, signal: { type: 'offer', sdp: peerConnection.localDescription } });
 
     }
-
-
 
     async function syncVideoSender(track, streamForTrack = null) {
 
@@ -4671,8 +4389,6 @@ function votePoll(pollId, optionIndex) {
         await sendOffer();
 
     }
-
-
 
     async function finishCall(notifyPeer = true) {
 
@@ -4722,8 +4438,6 @@ function votePoll(pollId, optionIndex) {
 
     }
 
-
-
     async function startOutgoingCall(kind = 'audio') {
 
         if (chatType !== 'private' || activeCall) return;
@@ -4757,8 +4471,6 @@ function votePoll(pollId, optionIndex) {
         });
 
     }
-
-
 
     async function handleSignal(signal, fromUserId) {
 
@@ -4815,8 +4527,6 @@ function votePoll(pollId, optionIndex) {
         }
 
     }
-
-
 
     startCallBtn?.addEventListener('click', () => startOutgoingCall('audio'));
 
@@ -4973,10 +4683,6 @@ function votePoll(pollId, optionIndex) {
         }
 
     });
-
-
-
-
 
     socket.on('call_invite', (data) => {
 
@@ -5162,8 +4868,6 @@ function votePoll(pollId, optionIndex) {
 
     {% endif %}
 
-
-
     {% if friendship_status == 'accepted' %} 
 
     <a href="{{ url_for('messenger', type='private', chat_id=user.id) }}" class="btn btn-success rounded-pill px-4">Сообщение</a> 
@@ -5184,8 +4888,6 @@ function votePoll(pollId, optionIndex) {
 
     {% endif %} 
 
-
-
     {% if current_user.is_admin %}
 
         <a href="{{ url_for('admin_ban_user', user_id=user.id) }}" class="btn btn-danger rounded-pill">
@@ -5203,8 +4905,6 @@ function votePoll(pollId, optionIndex) {
     {% endif %}
 
     <a href="{{ url_for('report', user_id=user.id) }}" class="btn btn-outline-danger rounded-pill">Пожаловаться</a>
-
-
 
 {% else %} 
 
@@ -5436,8 +5136,6 @@ function votePoll(pollId, optionIndex) {
 
 """,
 
-
-
     'notifications.html': """
 
 {% extends "base.html" %}
@@ -5516,8 +5214,6 @@ function votePoll(pollId, optionIndex) {
 
 </style>
 
-
-
 <div class="d-flex justify-content-between align-items-center mb-4">
 
     <h3 class="fw-bold mb-0"><i class="bi bi-shield-fill-check me-2 text-danger"></i>Панель Администратора</h3>
@@ -5525,8 +5221,6 @@ function votePoll(pollId, optionIndex) {
     <span class="badge bg-danger fs-6 rounded-pill px-3">ADMIN</span>
 
 </div>
-
-
 
 <!-- Stats Row -->
 
@@ -5640,8 +5334,6 @@ function votePoll(pollId, optionIndex) {
 
 </div>
 
-
-
 <!-- Charts -->
 
 <div class="row g-3 mb-4">
@@ -5671,8 +5363,6 @@ function votePoll(pollId, optionIndex) {
     </div>
 
 </div>
-
-
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
@@ -6144,8 +5834,6 @@ new Chart(document.getElementById('postsChart'), {
 
     }
 
-
-
     /* Comment drawer */
 
     .flux-comments-drawer {
@@ -6235,8 +5923,6 @@ new Chart(document.getElementById('postsChart'), {
     .drawer-backdrop.open { display: block; }
 
 </style>
-
-
 
 <div class="flux-page-wrap">
 
@@ -6334,8 +6020,6 @@ new Chart(document.getElementById('postsChart'), {
 
 </div>
 
-
-
 <!-- FABs -->
 
 <button class="flux-upload-fab" data-bs-toggle="modal" data-bs-target="#uploadFluxModal" title="Загрузить">
@@ -6349,8 +6033,6 @@ new Chart(document.getElementById('postsChart'), {
     <i class="bi bi-person-video3"></i>
 
 </a>
-
-
 
 <!-- Comment Drawer -->
 
@@ -6385,8 +6067,6 @@ new Chart(document.getElementById('postsChart'), {
     </div>
 
 </div>
-
-
 
 <!-- Upload Modal -->
 
@@ -6452,15 +6132,11 @@ new Chart(document.getElementById('postsChart'), {
 
 </div>
 
-
-
 <script>
 
     let currentCommentVideoId = null;
 
     const allComments = {{ video_comments_data|tojson }};
-
-
 
     // Auto-play on scroll
 
@@ -6469,8 +6145,6 @@ new Chart(document.getElementById('postsChart'), {
     let currentVideo = null;
 
     const viewedSet = new Set(); // Дедупликация просмотров в рамках сессии браузера
-
-
 
     const observer = new IntersectionObserver((entries) => {
 
@@ -6516,11 +6190,7 @@ new Chart(document.getElementById('postsChart'), {
 
     }, { threshold: 0.7 });
 
-
-
     document.querySelectorAll('.flux-item').forEach(item => observer.observe(item));
-
-
 
     // Авто-скролл к видео по якорю в URL (например /flux#video-42)
 
@@ -6536,8 +6206,6 @@ new Chart(document.getElementById('postsChart'), {
 
     }
 
-
-
     function togglePlay(video) {
 
         if (video.paused) video.play();
@@ -6545,8 +6213,6 @@ new Chart(document.getElementById('postsChart'), {
         else video.pause();
 
     }
-
-
 
     function likeFlux(id, btn) {
 
@@ -6567,8 +6233,6 @@ new Chart(document.getElementById('postsChart'), {
             });
 
     }
-
-
 
     function shareFlux(videoId) {
 
@@ -6597,8 +6261,6 @@ new Chart(document.getElementById('postsChart'), {
         }
 
     }
-
-
 
     function openComments(videoId) {
 
@@ -6644,8 +6306,6 @@ new Chart(document.getElementById('postsChart'), {
 
     }
 
-
-
     function closeComments() {
 
         document.getElementById('comments-drawer').classList.remove('open');
@@ -6655,8 +6315,6 @@ new Chart(document.getElementById('postsChart'), {
         currentCommentVideoId = null;
 
     }
-
-
 
     async function submitComment() {
 
@@ -6692,8 +6350,6 @@ new Chart(document.getElementById('postsChart'), {
 
     }
 
-
-
     document.getElementById('comment-input').addEventListener('keydown', (e) => {
 
         if (e.key === 'Enter') submitComment();
@@ -6705,8 +6361,6 @@ new Chart(document.getElementById('postsChart'), {
 {% endblock %}
 
 """,
-
-
 
     'users.html': """
 
@@ -6774,8 +6428,6 @@ new Chart(document.getElementById('postsChart'), {
 
 """,
 
-
-
     'flux_my_videos.html': """
 
 {% extends "base.html" %}
@@ -6840,8 +6492,6 @@ new Chart(document.getElementById('postsChart'), {
 
 </style>
 
-
-
 <div class="d-flex justify-content-between align-items-center mb-4">
 
     <h3 class="fw-bold mb-0"><i class="bi bi-play-btn-fill me-2"></i>Мои Flux</h3>
@@ -6853,8 +6503,6 @@ new Chart(document.getElementById('postsChart'), {
     </a>
 
 </div>
-
-
 
 <!-- Аналитика -->
 
@@ -6897,8 +6545,6 @@ new Chart(document.getElementById('postsChart'), {
     </div>
 
 </div>
-
-
 
 {% if my_videos %}
 
@@ -6974,665 +6620,415 @@ new Chart(document.getElementById('postsChart'), {
 
 """,
 
-
-
-    'fontan_ai.html': """
-
-{% extends "base.html" %}
-
+    'fontan_ai.html': """{% extends "base.html" %}
 {% block content %}
 
 <style>
-
-.ai-layout { display: flex; gap: 0; height: calc(100vh - 120px); max-height: 800px; border-radius: 20px; overflow: hidden; border: 1px solid var(--border-color); background: var(--card-bg); }
-
-.ai-sidebar { width: 260px; min-width: 220px; border-right: 1px solid var(--border-color); display: flex; flex-direction: column; background: var(--card-bg); }
-
-.ai-sidebar-header { padding: 16px; border-bottom: 1px solid var(--border-color); }
-
-.ai-chat-list { flex: 1; overflow-y: auto; padding: 8px; }
-
-.ai-chat-item { padding: 10px 14px; border-radius: 12px; cursor: pointer; margin-bottom: 4px; transition: background .2s; display: flex; align-items: center; gap: 8px; }
-
-.ai-chat-item:hover, .ai-chat-item.active { background: var(--hover-bg); }
-
-.ai-chat-item .chat-title { font-size: 0.88rem; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-.ai-chat-item .chat-time { font-size: 0.72rem; color: var(--text-muted); flex-shrink: 0; }
-
-.ai-main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-
-.ai-chat-header { padding: 14px 20px; border-bottom: 1px solid var(--border-color); display: flex; align-items: center; gap: 12px; }
-
-.ai-messages { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
-
-.ai-msg { display: flex; gap: 10px; max-width: 85%; animation: fadeIn .3s ease-out; }
-
-.ai-msg.user { align-self: flex-end; flex-direction: row-reverse; }
-
-.ai-msg.assistant { align-self: flex-start; }
-
-.ai-bubble { padding: 10px 16px; border-radius: 18px; font-size: 0.93rem; line-height: 1.5; word-break: break-word; }
-
-.ai-msg.user .ai-bubble { background: linear-gradient(135deg, #4f46e5, #7c3aed); color: #fff; border-radius: 18px 18px 4px 18px; }
-
-.ai-msg.assistant .ai-bubble { background: var(--hover-bg); color: var(--text-color); border-radius: 18px 18px 18px 4px; }
-
-.ai-avatar { width: 34px; height: 34px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; flex-shrink: 0; }
-
-.ai-avatar.bot { background: linear-gradient(135deg, #4f46e5, #7c3aed); color: #fff; }
-
-.ai-avatar.user { background: var(--hover-bg); }
-
-.ai-input-area { padding: 14px 20px; border-top: 1px solid var(--border-color); }
-
-.ai-input-row { display: flex; gap: 8px; align-items: flex-end; background: var(--hover-bg); border-radius: 16px; padding: 8px 12px; }
-
-.ai-input-row textarea { flex: 1; background: transparent; border: none; resize: none; color: var(--text-color); font-size: 0.93rem; max-height: 120px; outline: none; padding: 4px 0; }
-
-.ai-send-btn { width: 38px; height: 38px; border-radius: 50%; background: linear-gradient(135deg, #4f46e5, #7c3aed); border: none; color: #fff; display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; transition: transform .15s; }
-
-.ai-send-btn:hover:not(:disabled) { transform: scale(1.1); }
-
-.ai-send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-
-.ai-typing { display: flex; gap: 4px; align-items: center; padding: 10px 16px; background: var(--hover-bg); border-radius: 18px 18px 18px 4px; width: fit-content; }
-
-.ai-typing span { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); animation: typingBounce 1.2s infinite; }
-
-.ai-typing span:nth-child(2) { animation-delay: .2s; }
-
-.ai-typing span:nth-child(3) { animation-delay: .4s; }
-
+.ai-layout { display:flex; gap:0; height:calc(100vh - 120px); max-height:800px; border-radius:20px; overflow:hidden; border:1px solid var(--border-color); background:var(--card-bg); }
+.ai-sidebar { width:260px; min-width:220px; border-right:1px solid var(--border-color); display:flex; flex-direction:column; background:var(--card-bg); }
+.ai-sidebar-header { padding:16px; border-bottom:1px solid var(--border-color); }
+.ai-chat-list { flex:1; overflow-y:auto; padding:8px; }
+.ai-chat-item { padding:10px 14px; border-radius:12px; cursor:pointer; margin-bottom:4px; transition:background .2s; display:flex; align-items:center; gap:8px; }
+.ai-chat-item:hover, .ai-chat-item.active { background:var(--hover-bg); }
+.ai-chat-item .chat-title { font-size:.88rem; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ai-chat-item .chat-time { font-size:.72rem; color:var(--text-muted); flex-shrink:0; }
+.ai-main { flex:1; display:flex; flex-direction:column; min-width:0; }
+.ai-chat-header { padding:14px 20px; border-bottom:1px solid var(--border-color); display:flex; align-items:center; gap:12px; }
+.ai-messages { flex:1; overflow-y:auto; padding:20px; display:flex; flex-direction:column; gap:12px; }
+.ai-msg { display:flex; gap:10px; max-width:85%; animation:fadeIn .3s ease-out; }
+.ai-msg.user { align-self:flex-end; flex-direction:row-reverse; }
+.ai-msg.assistant { align-self:flex-start; }
+.ai-bubble { padding:10px 16px; border-radius:18px; font-size:.93rem; line-height:1.5; word-break:break-word; }
+.ai-msg.user .ai-bubble { background:linear-gradient(135deg,#4f46e5,#7c3aed); color:#fff; border-radius:18px 18px 4px 18px; }
+.ai-msg.assistant .ai-bubble { background:var(--hover-bg); color:var(--text-color); border-radius:18px 18px 18px 4px; }
+.ai-avatar { width:34px; height:34px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:1.1rem; flex-shrink:0; }
+.ai-avatar.bot { background:linear-gradient(135deg,#4f46e5,#7c3aed); color:#fff; }
+.ai-avatar.user { background:var(--hover-bg); }
+.ai-input-area { padding:14px 20px; border-top:1px solid var(--border-color); }
+.ai-input-row { display:flex; gap:8px; align-items:flex-end; background:var(--hover-bg); border-radius:16px; padding:8px 12px; }
+.ai-input-row textarea { flex:1; background:transparent; border:none; resize:none; color:var(--text-color); font-size:.93rem; max-height:120px; outline:none; padding:4px 0; }
+.ai-send-btn { width:38px; height:38px; border-radius:50%; background:linear-gradient(135deg,#4f46e5,#7c3aed); border:none; color:#fff; display:flex; align-items:center; justify-content:center; cursor:pointer; flex-shrink:0; transition:transform .15s; }
+.ai-send-btn:hover:not(:disabled) { transform:scale(1.1); }
+.ai-send-btn:disabled { opacity:.4; cursor:not-allowed; }
+.ai-typing { display:flex; gap:4px; align-items:center; padding:10px 16px; background:var(--hover-bg); border-radius:18px 18px 18px 4px; width:fit-content; }
+.ai-typing span { width:8px; height:8px; border-radius:50%; background:var(--text-muted); animation:typingBounce 1.2s infinite; }
+.ai-typing span:nth-child(2) { animation-delay:.2s; }
+.ai-typing span:nth-child(3) { animation-delay:.4s; }
 @keyframes typingBounce { 0%,60%,100%{transform:translateY(0);} 30%{transform:translateY(-6px);} }
-
-.ai-file-preview { display: flex; align-items: center; gap: 8px; background: var(--card-bg); border-radius: 10px; padding: 6px 10px; margin-bottom: 6px; font-size: 0.82rem; border: 1px solid var(--border-color); }
-
-.ai-file-label { cursor: pointer; color: var(--text-muted); }
-
-.ai-file-label:hover { color: var(--accent); }
-
-.ai-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--text-muted); gap: 12px; }
-
-.ai-admin-badge { font-size: 0.7rem; background: #f97316; color: #fff; padding: 2px 7px; border-radius: 8px; }
-
+.ai-file-preview { display:flex; align-items:center; gap:8px; background:var(--card-bg); border-radius:10px; padding:6px 10px; margin-bottom:6px; font-size:.82rem; border:1px solid var(--border-color); }
+.ai-file-label { cursor:pointer; color:var(--text-muted); }
+.ai-file-label:hover { color:var(--accent); }
+.ai-empty { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; color:var(--text-muted); gap:12px; }
 @keyframes fadeIn { from{opacity:0;transform:translateY(10px);} to{opacity:1;transform:translateY(0);} }
-
 @media(max-width:600px){.ai-sidebar{display:none;} .ai-sidebar.show{display:flex;position:fixed;inset:0;z-index:999;width:100%;}}
-
-.ai-msg-file img { max-width: 220px; border-radius: 12px; margin-top: 6px; cursor: pointer; }
-
-.ai-msg-file a { color: inherit; text-decoration: underline; font-size: 0.82rem; }
-
+.ai-msg-file img { max-width:220px; border-radius:12px; margin-top:6px; cursor:pointer; }
+.ai-msg-file a { color:inherit; text-decoration:underline; font-size:.82rem; }
+.ai-model-bar { display:flex; gap:6px; align-items:center; margin-bottom:8px; }
+.ai-model-btn { display:flex; align-items:center; gap:5px; padding:5px 12px; border-radius:20px; border:1.5px solid var(--border-color); background:transparent; color:var(--text-muted); font-size:.82rem; cursor:pointer; transition:all .2s; }
+.ai-model-btn.active { border-color:#7c3aed; background:rgba(124,58,237,.12); color:#7c3aed; font-weight:600; }
+.ai-model-btn:hover:not(.active) { border-color:var(--text-muted); }
+.ai-model-cost { font-size:.72rem; background:rgba(124,58,237,.18); color:#7c3aed; border-radius:8px; padding:1px 5px; }
+.ai-credits-bar { display:flex; align-items:center; gap:8px; font-size:.8rem; color:var(--text-muted); margin-bottom:8px; }
+.ai-credits-pill { background:rgba(124,58,237,.13); color:#7c3aed; border-radius:12px; padding:3px 10px; font-weight:700; font-size:.82rem; }
+.ai-credits-low { background:rgba(239,68,68,.13); color:#ef4444; }
+.ai-code-block { position:relative; margin:8px 0; border-radius:10px; overflow:hidden; }
+.ai-code-block pre { margin:0; padding:12px 14px 12px 14px; background:#1e1e2e; color:#cdd6f4; font-size:.85rem; overflow-x:auto; }
+.ai-code-block code { font-family:'Fira Code',monospace,sans-serif; }
+.ai-copy-btn { position:absolute; top:6px; right:6px; background:rgba(255,255,255,.12); border:none; border-radius:7px; color:#fff; padding:3px 9px; font-size:.75rem; cursor:pointer; display:flex; align-items:center; gap:4px; transition:background .2s; }
+.ai-copy-btn:hover { background:rgba(255,255,255,.25); }
+.ai-copy-btn.copied { background:rgba(34,197,94,.3); color:#86efac; }
+.ai-code-lang { position:absolute; top:7px; left:10px; font-size:.7rem; color:#888; font-family:monospace; }
+.ai-model-badge { font-size:.68rem; padding:1px 6px; border-radius:6px; margin-left:4px; }
+.ai-model-badge.fast { background:rgba(59,130,246,.15); color:#3b82f6; }
+.ai-model-badge.smart { background:rgba(124,58,237,.15); color:#7c3aed; }
 </style>
 
-
-
 <div class="ai-layout">
-
-  <!-- Sidebar -->
-
   <div class="ai-sidebar" id="aiSidebar">
-
     <div class="ai-sidebar-header">
-
       <div class="d-flex align-items-center justify-content-between mb-2">
-
         <span class="fw-bold"><i class="bi bi-robot me-1" style="color:#7c3aed"></i>FontanAI</span>
-
       </div>
-
       <button class="btn btn-primary btn-sm w-100 rounded-pill" onclick="newChat()">
-
         <i class="bi bi-plus-lg me-1"></i>Новый чат
-
       </button>
-
     </div>
-
     <div class="ai-chat-list" id="chatList">
-
       {% for c in chats %}
-
       <div class="ai-chat-item {% if loop.first %}active{% endif %}" data-chat-id="{{ c.id }}" onclick="loadChat({{ c.id }}, this)">
-
         <i class="bi bi-chat-dots text-muted" style="font-size:.9rem;flex-shrink:0;"></i>
-
         <span class="chat-title">{{ c.title }}</span>
-
         <span class="chat-time">{{ c.updated_at|time_ago }}</span>
-
       </div>
-
       {% endfor %}
-
     </div>
-
   </div>
-
-
-
-  <!-- Main -->
 
   <div class="ai-main">
-
     <div class="ai-chat-header">
-
       <button class="btn btn-sm btn-outline-secondary d-md-none" onclick="document.getElementById('aiSidebar').classList.toggle('show')">
-
         <i class="bi bi-list"></i>
-
       </button>
-
       <div class="ai-avatar bot"><i class="bi bi-robot"></i></div>
-
       <div class="flex-1">
-
         <span class="fw-semibold" id="chatTitle">{% if chats %}{{ chats[0].title }}{% else %}FontanAI{% endif %}</span>
-
-        <div class="text-muted small" style="font-size:.75rem;">Powered by Groq · Llama3-70B</div>
-
+        <div class="text-muted small" style="font-size:.75rem;" id="modelHint">Powered by Groq &middot; выбери модель ниже</div>
       </div>
-
       <div class="ms-auto d-flex gap-2">
-
         <button class="btn btn-sm btn-outline-danger rounded-pill" id="deleteChatBtn" onclick="deleteCurrentChat()" style="display:none;">
-
           <i class="bi bi-trash"></i>
-
         </button>
-
       </div>
-
     </div>
-
-
 
     <div class="ai-messages" id="aiMessages">
-
       <div class="ai-empty" id="aiEmpty">
-
         <i class="bi bi-robot" style="font-size:3.5rem;opacity:.3;"></i>
-
         <div class="text-center">
-
           <div class="fw-semibold">FontanAI готов к работе</div>
-
           <div class="small opacity-75">Задай вопрос или создай новый чат</div>
-
         </div>
-
       </div>
-
     </div>
-
-
 
     <div class="ai-input-area">
-
-      <div id="filePreview" style="display:none;" class="ai-file-preview">
-
-        <i class="bi bi-paperclip"></i>
-
-        <span id="filePreviewName" class="flex-1 text-truncate"></span>
-
-        <button class="btn btn-sm btn-link text-danger p-0" onclick="clearFile()"><i class="bi bi-x"></i></button>
-
+      <div class="ai-credits-bar" id="creditsBar">
+        <i class="bi bi-lightning-charge-fill" style="color:#7c3aed"></i>
+        <span>Кредиты:</span>
+        <span class="ai-credits-pill" id="creditsVal">{{ ai_credit_state.balance }}</span>
+        <span class="text-muted" style="font-size:.75rem">/ {{ ai_credit_state.limit }} в день</span>
       </div>
-
-      <div class="ai-input-row">
-
-        <label class="ai-file-label" for="aiFileInput" title="Прикрепить файл">
-
-          <i class="bi bi-paperclip fs-5"></i>
-
-        </label>
-
-        <input type="file" id="aiFileInput" style="display:none;" accept="image/*,.pdf,.txt,.doc,.docx" onchange="handleFileSelect(this)">
-
-        <textarea id="aiInput" placeholder="Напиши сообщение…" rows="1"
-
-                  onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();aiSendMessage();}"
-
-                  oninput="this.style.height='auto';this.style.height=this.scrollHeight+'px'"></textarea>
-
-        <button class="ai-send-btn" id="aiSendBtn" onclick="aiSendMessage()">
-
-          <i class="bi bi-send-fill"></i>
-
+      <div class="ai-model-bar">
+        {% for m in ai_model_options %}
+        <button class="ai-model-btn {% if loop.first %}active{% endif %}"
+                data-model-key="{{ m.key }}"
+                data-model-cost="{{ m.cost }}"
+                data-model-hint="{{ m.hint }}"
+                onclick="selectModel(this)"
+                title="{{ m.hint }}">
+          {% if m.key == 'fast' %}<i class="bi bi-lightning-fill" style="font-size:.85rem"></i>
+          {% else %}<i class="bi bi-stars" style="font-size:.85rem"></i>{% endif %}
+          {{ m.label }}
+          <span class="ai-model-cost">{{ m.cost }} кр.</span>
         </button>
-
+        {% endfor %}
       </div>
-
+      <div id="filePreview" style="display:none;" class="ai-file-preview">
+        <i class="bi bi-paperclip"></i>
+        <span id="filePreviewName" class="flex-1 text-truncate"></span>
+        <button class="btn btn-sm btn-link text-danger p-0" onclick="clearFile()"><i class="bi bi-x"></i></button>
+      </div>
+      <div class="ai-input-row">
+        <label class="ai-file-label" for="aiFileInput" title="Прикрепить файл">
+          <i class="bi bi-paperclip fs-5"></i>
+        </label>
+        <input type="file" id="aiFileInput" style="display:none;" accept="image/*,.pdf,.txt,.doc,.docx" onchange="handleFileSelect(this)">
+        <textarea id="aiInput" placeholder="Напиши сообщение…" rows="1"
+                  onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();aiSendMessage();}"
+                  oninput="this.style.height='auto';this.style.height=this.scrollHeight+'px'"></textarea>
+        <button class="ai-send-btn" id="aiSendBtn" onclick="aiSendMessage()">
+          <i class="bi bi-send-fill"></i>
+        </button>
+      </div>
     </div>
-
   </div>
-
 </div>
 
-
-
 <script>
-
 let currentChatId = {% if chats %}{{ chats[0].id }}{% else %}null{% endif %};
-
 let isWaiting = false;
-
 let aiNextSendAt = 0;
-
+let selectedModelKey = '{{ ai_model_options[0].key if ai_model_options else "fast" }}';
 const AI_COOLDOWN_SECONDS = 5;
 
-
-
-function startAiCooldown(seconds) {
-
-  const secs = Math.max(0, parseInt(seconds || 0, 10));
-
-  if (!secs) return;
-
-  aiNextSendAt = Date.now() + (secs * 1000);
-
+function selectModel(btn) {
+  document.querySelectorAll('.ai-model-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  selectedModelKey = btn.dataset.modelKey;
+  document.getElementById('modelHint').textContent = btn.dataset.modelHint;
 }
 
+function startAiCooldown(seconds) {
+  const secs = Math.max(0, parseInt(seconds || 0, 10));
+  if (!secs) return;
+  aiNextSendAt = Date.now() + (secs * 1000);
+}
 
+function updateCredits(creditObj) {
+  if (!creditObj) return;
+  const el = document.getElementById('creditsVal');
+  if (!el) return;
+  el.textContent = creditObj.balance;
+  el.classList.toggle('ai-credits-low', creditObj.balance <= 5);
+}
 
 {% if chats %}loadChat({{ chats[0].id }}, document.querySelector('.ai-chat-item'));{% endif %}
 
-
-
 async function newChat() {
-
   const res = await fetch('/api/ai/new_chat', {method:'POST'});
-
   const data = await res.json();
-
   currentChatId = data.chat_id;
-
-  // Добавляем в список
-
   const list = document.getElementById('chatList');
-
   const item = document.createElement('div');
-
   item.className = 'ai-chat-item active';
-
   item.dataset.chatId = data.chat_id;
-
   item.onclick = function(){ loadChat(data.chat_id, this); };
-
   item.innerHTML = `<i class="bi bi-chat-dots text-muted" style="font-size:.9rem;flex-shrink:0;"></i><span class="chat-title">${data.title}</span><span class="chat-time">только что</span>`;
-
   list.querySelectorAll('.ai-chat-item').forEach(el => el.classList.remove('active'));
-
   list.prepend(item);
-
   document.getElementById('aiMessages').innerHTML = '<div class="ai-empty" id="aiEmpty"><i class="bi bi-robot" style="font-size:3.5rem;opacity:.3;"></i><div class="text-center"><div class="fw-semibold">Новый чат</div><div class="small opacity-75">Задай вопрос FontanAI</div></div></div>';
-
   document.getElementById('chatTitle').textContent = 'Новый чат';
-
   document.getElementById('deleteChatBtn').style.display = 'inline-block';
-
 }
-
-
 
 async function loadChat(chatId, el) {
-
   currentChatId = chatId;
-
-  document.querySelectorAll('.ai-chat-item').forEach(x => x.classList.remove('active'));
-
-  if(el) el.classList.add('active');
-
+  document.querySelectorAll('.ai-chat-item').forEach(i => i.classList.remove('active'));
+  if (el) el.classList.add('active');
   document.getElementById('deleteChatBtn').style.display = 'inline-block';
-
-  const res = await fetch(`/api/ai/chat/${chatId}`);
-
-  const data = await res.json();
-
-  document.getElementById('chatTitle').textContent = data.title;
-
   const box = document.getElementById('aiMessages');
-
+  box.innerHTML = '<div class="text-center py-4 text-muted small">Загрузка…</div>';
+  const res = await fetch(`/api/ai/chat/${chatId}`);
+  const data = await res.json();
+  document.getElementById('chatTitle').textContent = data.title || 'Чат';
+  updateCredits(data.credits);
   box.innerHTML = '';
-
-  if(!data.messages.length){
-
-    box.innerHTML = '<div class="ai-empty"><i class="bi bi-robot" style="font-size:3.5rem;opacity:.3;"></i><div class="text-center"><div class="fw-semibold">Чат пустой</div><div class="small opacity-75">Напиши первое сообщение!</div></div></div>';
-
-    return;
-
+  if (!data.messages || data.messages.length === 0) {
+    box.innerHTML = '<div class="ai-empty" id="aiEmpty"><i class="bi bi-robot" style="font-size:3.5rem;opacity:.3;"></i><div class="text-center"><div class="fw-semibold">FontanAI готов к работе</div><div class="small opacity-75">Задай вопрос или создай новый чат</div></div></div>';
+  } else {
+    data.messages.forEach(m => appendMessage(m));
   }
-
-  data.messages.forEach(m => appendMessage(m));
-
-  box.scrollTop = box.scrollHeight;
-
 }
 
+function copyCode(blockId, btn) {
+  const el = document.getElementById(blockId);
+  if (!el) return;
+  navigator.clipboard.writeText(el.textContent).then(() => {
+    btn.innerHTML = '<i class="bi bi-check2"></i> Скопировано';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.innerHTML = '<i class="bi bi-clipboard"></i> Копировать'; btn.classList.remove('copied'); }, 2000);
+  });
+}
 
+function renderMarkdown(text) {
+  if (!text) return '';
+  let html = '';
+  const parts = text.split(/(```[\\s\\S]*?```)/g);
+  parts.forEach(part => {
+    if (part.startsWith('```')) {
+      const lines = part.slice(3).split('\n');
+      const lang = lines[0].trim() || 'code';
+      const code = lines.slice(1).join('\n').replace(/```$/, '').trimEnd();
+      const escaped = code.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      const bid = 'cb_' + Math.random().toString(36).slice(2,8);
+      html += `<div class="ai-code-block"><span class="ai-code-lang">${lang}</span><pre><code id="${bid}">${escaped}</code></pre><button class="ai-copy-btn" onclick="copyCode('${bid}',this)"><i class="bi bi-clipboard"></i> Копировать</button></div>`;
+    } else {
+      let t = part.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+        .replace(/[*][*](.+?)[*][*]/g,'<strong>$1</strong>')
+        .replace(/[*](.+?)[*]/g,'<em>$1</em>')
+        .replace(/`(.+?)`/g,'<code style="background:rgba(124,58,237,.12);padding:1px 5px;border-radius:4px;font-size:.87em">$1</code>')
+        .replace(/\n/g,'<br>');
+      html += t;
+    }
+  });
+  return html;
+}
 
 function appendMessage(m) {
-
   const box = document.getElementById('aiMessages');
-
   const empty = document.getElementById('aiEmpty');
-
-  if(empty) empty.remove();
-
-
-
+  if (empty) empty.remove();
   const wrap = document.createElement('div');
-
-  wrap.className = `ai-msg ${m.role === 'user' ? 'user' : 'assistant'}`;
-
-
-
+  wrap.className = `ai-msg ${m.role}`;
   const avatar = document.createElement('div');
-
   avatar.className = `ai-avatar ${m.role === 'user' ? 'user' : 'bot'}`;
-
   avatar.innerHTML = m.role === 'user' ? '<i class="bi bi-person-fill"></i>' : '<i class="bi bi-robot"></i>';
-
-
-
   const bubble = document.createElement('div');
-
   bubble.className = 'ai-bubble';
-
   let html = '';
-
-  if(m.content) html += `<div>${m.content.replace(/\\n/g,'<br>')}</div>`;
-
-  if(m.file_url){
-
-    if(m.file_type === 'image'){
-
-      html += `<div class="ai-msg-file"><img src="${m.file_url}" onclick="window.open('${m.file_url}','_blank')"></div>`;
-
-    } else {
-
-      html += `<div class="ai-msg-file"><a href="${m.file_url}" target="_blank"><i class="bi bi-paperclip me-1"></i>Файл</a></div>`;
-
-    }
-
+  if (m.role === 'assistant') {
+    html += renderMarkdown(m.content || '');
+    if (m.model) html += `<span class="ai-model-badge ${m.model}">${m.model === 'smart' ? '🧠 Думающая' : '⚡ Быстрая'}</span>`;
+  } else {
+    html += (m.content || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
   }
-
+  if (m.file_url) {
+    if (m.file_type === 'image') html += `<div class="ai-msg-file"><img src="${m.file_url}" onclick="window.open('${m.file_url}','_blank')"></div>`;
+    else html += `<div class="ai-msg-file"><a href="${m.file_url}" target="_blank"><i class="bi bi-paperclip me-1"></i>Файл</a></div>`;
+  }
   html += `<div style="font-size:.7rem;opacity:.5;margin-top:4px;text-align:${m.role==='user'?'right':'left'}">${m.timestamp}</div>`;
-
   bubble.innerHTML = html;
-
-
-
-  if(m.role === 'user') { wrap.appendChild(bubble); wrap.appendChild(avatar); }
-
+  if (m.role === 'user') { wrap.appendChild(bubble); wrap.appendChild(avatar); }
   else { wrap.appendChild(avatar); wrap.appendChild(bubble); }
-
   box.appendChild(wrap);
-
   box.scrollTop = box.scrollHeight;
-
 }
-
-
 
 function showTyping() {
-
   const box = document.getElementById('aiMessages');
-
   const empty = document.getElementById('aiEmpty');
-
-  if(empty) empty.remove();
-
+  if (empty) empty.remove();
   const wrap = document.createElement('div');
-
   wrap.className = 'ai-msg assistant';
-
   wrap.id = 'typingIndicator';
-
   wrap.innerHTML = `<div class="ai-avatar bot"><i class="bi bi-robot"></i></div><div class="ai-typing"><span></span><span></span><span></span></div>`;
-
   box.appendChild(wrap);
-
   box.scrollTop = box.scrollHeight;
-
 }
-
-
 
 function removeTyping() {
-
   const t = document.getElementById('typingIndicator');
-
-  if(t) t.remove();
-
+  if (t) t.remove();
 }
-
-
 
 let selectedFile = null;
-
 function handleFileSelect(input) {
-
   selectedFile = input.files[0];
-
-  if(selectedFile){
-
+  if (selectedFile) {
     document.getElementById('filePreview').style.display = 'flex';
-
     document.getElementById('filePreviewName').textContent = selectedFile.name;
-
   }
-
 }
-
 function clearFile() {
-
   selectedFile = null;
-
   document.getElementById('aiFileInput').value = '';
-
   document.getElementById('filePreview').style.display = 'none';
-
 }
-
-
 
 async function aiSendMessage() {
-
-  if(isWaiting) return;
-
-  if(Date.now() < aiNextSendAt) {
-
-    const waitLeft = Math.ceil((aiNextSendAt - Date.now()) / 1000);
-
-    alert(`Подожди ${waitLeft} сек перед следующим сообщением`);
-
+  if (isWaiting) return;
+  if (Date.now() < aiNextSendAt) {
+    alert(`Подожди ${Math.ceil((aiNextSendAt - Date.now()) / 1000)} сек`);
     return;
-
   }
-
   const input = document.getElementById('aiInput');
-
   const text = input.value.trim();
-
-  if(!text && !selectedFile) return;
-
-  if(!currentChatId) {
-
-    try {
-
-      await newChat();
-
-    } catch (e) {
-
-      alert('Не удалось создать чат');
-
-      return;
-
-    }
-
+  if (!text && !selectedFile) return;
+  if (!currentChatId) {
+    try { await newChat(); } catch(e) { alert('Не удалось создать чат'); return; }
   }
-
-
-
   isWaiting = true;
-
   document.getElementById('aiSendBtn').disabled = true;
-
-
-
   const formData = new FormData();
-
   formData.append('chat_id', currentChatId);
-
-  if(text) formData.append('content', text);
-
-  if(selectedFile) formData.append('file', selectedFile);
-
-
-
+  formData.append('model', selectedModelKey);
+  if (text) formData.append('content', text);
+  if (selectedFile) formData.append('file', selectedFile);
   input.value = '';
-
   input.style.height = 'auto';
-
   clearFile();
-
-
-
   showTyping();
-
-
-
   try {
-
-    const res = await fetch('/api/ai/send', { method: 'POST', body: formData });
-
+    const res = await fetch('/api/ai/send', {method:'POST', body:formData});
     removeTyping();
-
-    if(res.status === 429) {
-
+    if (res.status === 429) {
       const data = await res.json();
-
       startAiCooldown(data.retry_after || AI_COOLDOWN_SECONDS);
-
       alert(data.error || 'Подожди немного!');
-
       isWaiting = false;
-
       document.getElementById('aiSendBtn').disabled = false;
-
       return;
-
     }
-
+    if (res.status === 402) {
+      const data = await res.json();
+      alert(data.error || 'Недостаточно кредитов!');
+      updateCredits(data.credits);
+      isWaiting = false;
+      document.getElementById('aiSendBtn').disabled = false;
+      return;
+    }
     const data = await res.json();
-
-    if(data.error){ alert(data.error); isWaiting = false; document.getElementById('aiSendBtn').disabled = false; return; }
-
+    if (data.error) { alert(data.error); isWaiting = false; document.getElementById('aiSendBtn').disabled = false; return; }
     appendMessage(data.user_msg);
-
     startAiCooldown(AI_COOLDOWN_SECONDS);
-
-    if(data.ai_msg) appendMessage(data.ai_msg);
-
-    else if(data.admin_mode) {
-
-      // В режиме ожидания ответа от админа
-
+    if (data.ai_msg) appendMessage(data.ai_msg);
+    else if (data.admin_mode) {
       const box = document.getElementById('aiMessages');
-
       const notice = document.createElement('div');
-
       notice.className = 'text-center text-muted small my-2';
-
       notice.textContent = '⏳ Ожидаем ответа оператора…';
-
       box.appendChild(notice);
-
       box.scrollTop = box.scrollHeight;
-
     }
-
-    // Обновить заголовок в сайдбаре
-
+    if (data.credits) updateCredits(data.credits);
     const item = document.querySelector(`.ai-chat-item[data-chat-id="${currentChatId}"] .chat-title`);
-
-    if(item) item.textContent = document.getElementById('chatTitle').textContent;
-
+    if (item) item.textContent = document.getElementById('chatTitle').textContent;
   } catch(e) {
-
     removeTyping();
-
-    appendMessage({role:'assistant',content:'⏳ Попробуйте позже — нейросеть не отвечает.',timestamp:new Date().toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'})});
-
+    appendMessage({role:'assistant', content:'⏳ Попробуйте позже — нейросеть не отвечает.', timestamp:new Date().toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'})});
   }
-
   isWaiting = false;
-
   document.getElementById('aiSendBtn').disabled = false;
-
   input.focus();
-
 }
-
-
 
 async function deleteCurrentChat() {
-
-  if(!currentChatId) return;
-
-  if(!confirm('Удалить этот чат?')) return;
-
+  if (!currentChatId) return;
+  if (!confirm('Удалить этот чат?')) return;
   await fetch(`/api/ai/delete_chat/${currentChatId}`, {method:'POST'});
-
   const item = document.querySelector(`.ai-chat-item[data-chat-id="${currentChatId}"]`);
-
-  if(item) item.remove();
-
+  if (item) item.remove();
   currentChatId = null;
-
   document.getElementById('aiMessages').innerHTML = '<div class="ai-empty"><i class="bi bi-robot" style="font-size:3.5rem;opacity:.3;"></i><div class="text-center"><div class="fw-semibold">Чат удалён</div></div></div>';
-
   document.getElementById('deleteChatBtn').style.display = 'none';
-
 }
 
-
-
-// Если есть Socket.IO — слушаем ответы от админа
-
-if(typeof io !== 'undefined') {
-
+if (typeof io !== 'undefined') {
   const sock = io();
-
   sock.on('connect', () => { if(currentChatId) sock.emit('join_ai_chat', {chat_id: currentChatId}); });
-
   sock.on('ai_message', (data) => {
-
-    if(data.chat_id == currentChatId) {
-
+    if (data.chat_id == currentChatId) {
       removeTyping();
-
       appendMessage({role:'assistant', content:data.content, timestamp:data.timestamp});
-
       isWaiting = false;
-
       document.getElementById('aiSendBtn').disabled = false;
-
     }
-
   });
-
 }
-
 </script>
 
 {% endblock %}
-
 """,
-
-
 
     'admin_ai_chats.html': """
 
@@ -7666,8 +7062,6 @@ if(typeof io !== 'undefined') {
 
 </style>
 
-
-
 <div class="d-flex align-items-center justify-content-between mb-4">
 
   <h3 class="fw-bold mb-0"><i class="bi bi-robot me-2" style="color:#7c3aed"></i>FontanAI — Все чаты</h3>
@@ -7675,8 +7069,6 @@ if(typeof io !== 'undefined') {
   <a href="{{ url_for('admin_dashboard') }}" class="btn btn-outline-secondary rounded-pill"><i class="bi bi-arrow-left me-1"></i>Назад</a>
 
 </div>
-
-
 
 <div class="ai-admin-chat-list">
 
@@ -7768,8 +7160,6 @@ if(typeof io !== 'undefined') {
 
 </div>
 
-
-
 <script>
 
 async function toggleMode(chatId) {
@@ -7801,8 +7191,6 @@ async function toggleMode(chatId) {
   }
 
 }
-
-
 
 async function adminReply(chatId) {
 
@@ -7838,8 +7226,6 @@ async function adminReply(chatId) {
 
 }
 
-
-
 // Прокрутить все чаты вниз
 
 document.querySelectorAll('.ai-chat-msgs').forEach(el => el.scrollTop = el.scrollHeight);
@@ -7852,17 +7238,11 @@ document.querySelectorAll('.ai-chat-msgs').forEach(el => el.scrollTop = el.scrol
 
 }
 
-
-
 app.jinja_env.filters['from_json'] = safe_from_json
 
 app.jinja_loader = jinja2.DictLoader(templates)
 
-
-
 # --- ROUTES ---
-
-
 
 @app.route('/')
 
@@ -7902,8 +7282,6 @@ def index():
 
     posts = [p for _, p in ranked][:10]
 
-    
-
     for p in posts:
 
         view = PostView.query.filter_by(user_id=current_user.id, post_id=p.id).first()
@@ -7920,8 +7298,6 @@ def index():
 
     return render_template('index.html', posts=posts, stories=stories)
 
-
-
 @app.route('/api/load_posts')
 
 @login_required
@@ -7933,8 +7309,6 @@ def load_posts_api():
     page = request.args.get('page', 1, type=int)
 
     per_page = 10
-
-    
 
     following_ids = [f.following_id for f in current_user.following.all()]
 
@@ -7966,8 +7340,6 @@ def load_posts_api():
 
     items = [p for _, p in ranked][(page-1)*per_page:page*per_page]
 
-    
-
     posts_html = []
 
     for post in items:
@@ -7982,17 +7354,11 @@ def load_posts_api():
 
             post.views += 1
 
-        
-
         posts_html.append(render_template('post_card.html', post=post))
-
-    
 
     db.session.commit()
 
     return jsonify({'posts': posts_html})
-
-
 
 @app.route('/profile/<username>')
 
@@ -8028,8 +7394,6 @@ def profile(username):
 
     return render_template('profile.html', user=user, posts=posts, friendship_status=status, is_online=is_online)
 
-
-
 # --- Р’РђР™Р‘Р•Р Р« (РџРћР”РџРРЎРљР) ---
 
 @app.route('/follow/<int:user_id>')
@@ -8041,8 +7405,6 @@ def follow_user(user_id):
     if user_id == current_user.id:
 
         return redirect(request.referrer)
-
-    
 
     existing = Follow.query.filter_by(follower_id=current_user.id, following_id=user_id).first()
 
@@ -8056,11 +7418,7 @@ def follow_user(user_id):
 
         flash("Вы вайбнулись! 💜", "success")
 
-    
-
     return redirect(request.referrer or url_for('index'))
-
-
 
 @app.route('/unfollow/<int:user_id>')
 
@@ -8078,11 +7436,7 @@ def unfollow_user(user_id):
 
         flash("Вы отписались", "info")
 
-    
-
     return redirect(request.referrer or url_for('index'))
-
-
 
 @app.route('/my_vibers')
 
@@ -8098,8 +7452,6 @@ def my_vibers():
 
     return render_template('my_vibers.html', followers=followers)
 
-
-
 # --- РџР•Р Р•РљР›Р®Р§Р•РќРР• РўР•РњР« ---
 
 @app.route('/toggle_theme', methods=['POST'])
@@ -8113,8 +7465,6 @@ def toggle_theme():
     db.session.commit()
 
     return jsonify({'theme': current_user.theme})
-
-
 
 # --- Р“РћР›РћРЎРћР’РђРќРР• Р’ РћРџР РћРЎРђРҐ ---
 
@@ -8130,8 +7480,6 @@ def vote_poll(poll_id, option_index):
 
         return jsonify({'error': 'Опрос не найден'}), 404
 
-    
-
     # Проверяем, голосовал ли уже
 
     existing_vote = PollVote.query.filter_by(poll_id=poll_id, user_id=current_user.id).first()
@@ -8140,13 +7488,9 @@ def vote_poll(poll_id, option_index):
 
         return jsonify({'error': 'Вы уже голосовали'}), 400
 
-    
-
     # Добавляем голос
 
     db.session.add(PollVote(poll_id=poll_id, user_id=current_user.id, option_index=option_index))
-
-    
 
     # Обновляем счётчик
 
@@ -8156,13 +7500,9 @@ def vote_poll(poll_id, option_index):
 
     poll.votes = json.dumps(votes)
 
-    
-
     db.session.commit()
 
     return jsonify({'success': True})
-
-
 
 # --- РђР”РњРРќРЎРљРР• Р¤РЈРќРљР¦РР ---
 
@@ -8186,8 +7526,6 @@ def admin_ban_user(user_id):
 
     return redirect(url_for('profile', username=user.username))
 
-
-
 @app.route('/admin/verify/<int:user_id>')
 
 @login_required
@@ -8207,8 +7545,6 @@ def admin_verify_user(user_id):
         flash("Статус верификации изменен", "success")
 
     return redirect(url_for('profile', username=user.username))
-
-
 
 # --- ДРУЗЬЯ ---
 
@@ -8238,8 +7574,6 @@ def add_friend(user_id):
 
     return redirect(request.referrer)
 
-
-
 @app.route('/accept_friend/<int:user_id>')
 
 @login_required
@@ -8257,8 +7591,6 @@ def accept_friend(user_id):
         flash("Теперь вы друзья!", "success")
 
     return redirect(request.referrer)
-
-
 
 @app.route('/remove_friend/<int:user_id>')
 
@@ -8284,8 +7616,6 @@ def remove_friend(user_id):
 
     return redirect(request.referrer)
 
-
-
 @app.route('/friends/requests')
 
 @login_required
@@ -8304,8 +7634,6 @@ def friends_requests():
 
     return render_template('friends.html', requests=reqs)
 
-
-
 # --- МЕССЕНДЖЕР ---
 
 @app.route('/messenger')
@@ -8317,8 +7645,6 @@ def messenger():
     chat_type = request.args.get('type')
 
     chat_id = request.args.get('chat_id')
-
-    
 
     friends_relations = Friendship.query.filter(
 
@@ -8340,8 +7666,6 @@ def messenger():
 
             friends.append(u)
 
-        
-
     groups = current_user.groups
 
     active_chat = None
@@ -8357,8 +7681,6 @@ def messenger():
         if active_chat and current_user not in active_chat.members:
 
              active_chat = None
-
-
 
     now = datetime.utcnow()
 
@@ -8381,8 +7703,6 @@ def messenger():
         webrtc_ice_servers=WEBRTC_ICE_SERVERS
 
     )
-
-
 
 @app.route('/create_group', methods=['POST'])
 
@@ -8422,8 +7742,6 @@ def create_group():
 
     return redirect(url_for('messenger'))
 
-
-
 @app.route('/api/messages')
 
 @login_required
@@ -8442,8 +7760,6 @@ def get_messages():
 
     messages = []
 
-    
-
     if type_ == 'private':
 
         messages = Message.query.filter(
@@ -8461,8 +7777,6 @@ def get_messages():
         if group and current_user in group.members:
 
             messages = Message.query.filter_by(group_id=id_).order_by(Message.timestamp.asc()).all()
-
-
 
     result = []
 
@@ -8512,8 +7826,6 @@ def get_messages():
 
     return jsonify(result)
 
-
-
 @app.route('/api/send_message', methods=['POST'])
 
 @login_required
@@ -8530,15 +7842,11 @@ def send_api_message():
 
         return jsonify({'error': 'Bad target'}), 400
 
-
-
     body = normalize_text(request.form.get('body'))
 
     voice = request.files.get('voice')
 
     client_token = request.form.get('client_token', '').strip()
-
-    
 
     voice_url = None
 
@@ -8546,27 +7854,19 @@ def send_api_message():
 
         voice_url = upload_to_cloud(voice, resource_type="video")
 
-
-
     if not body and not voice_url:
 
         return jsonify({'error': 'Empty'}), 400
 
-
-
     if not consume_idempotency_token(f'message:{type_}:{target_id}', client_token):
 
         return jsonify({'status': 'duplicate'}), 200
-
-
 
     signature = f'{type_}:{target_id}:{body}:{bool(voice_url)}'
 
     if recent_duplicate_signature(f'message-sig:{target_id}', signature):
 
         return jsonify({'status': 'duplicate'}), 200
-
-
 
     if type_ == 'private':
 
@@ -8588,8 +7888,6 @@ def send_api_message():
 
         return jsonify({'error': 'Bad type'}), 400
 
-
-
     msg = Message(sender_id=current_user.id, body=body, voice_filename=voice_url, client_token=client_token or None)
 
     if type_ == 'private':
@@ -8600,8 +7898,6 @@ def send_api_message():
 
         msg.group_id = target_id
 
-        
-
     db.session.add(msg)
 
     db.session.commit()
@@ -8611,8 +7907,6 @@ def send_api_message():
     socketio.emit('message', {'room_id': room}, to=room)
 
     return jsonify({'status': 'ok'})
-
-
 
 @app.route('/api/edit_message', methods=['POST'])
 
@@ -8643,8 +7937,6 @@ def edit_message_api():
         return jsonify({'ok': True})
 
     return jsonify({'ok': False}), 400
-
-
 
 @app.route('/api/delete_message', methods=['POST'])
 
@@ -8684,8 +7976,6 @@ def delete_message_api():
 
     return jsonify({'ok': True})
 
-
-
 # --- РџРћРЎРўР« Р РљРћРњРњР•РќРўРђР РР ---
 
 @app.route('/add_voice_comment/<int:post_id>', methods=['POST'])
@@ -8714,8 +8004,6 @@ def add_voice_comment(post_id):
 
     return jsonify({'error': 'No file'}), 400
 
-
-
 @app.route('/users')
 
 @login_required
@@ -8726,8 +8014,6 @@ def users_list():
 
     return render_template('users.html', users=users)
 
-
-
 @app.route('/settings')
 
 @login_required
@@ -8735,8 +8021,6 @@ def users_list():
 def settings():
 
     return render_template('settings.html')
-
-
 
 @app.route('/update_settings', methods=['POST'])
 
@@ -8756,8 +8040,6 @@ def update_settings():
 
     banner = request.files.get('banner')
 
-    
-
     if file and file.filename != '':
 
         url = upload_to_cloud(file, resource_type="image")
@@ -8769,8 +8051,6 @@ def update_settings():
         url = upload_to_cloud(banner, resource_type="image")
 
         if url: current_user.banner = url
-
-            
 
     if bio: current_user.bio = bio
 
@@ -8792,8 +8072,6 @@ def update_settings():
 
     return redirect(url_for('profile', username=current_user.username))
 
-
-
 @app.route('/notifications')
 
 @login_required
@@ -8807,8 +8085,6 @@ def notifications():
     db.session.commit()
 
     return render_template('notifications.html', notifications=notes)
-
-
 
 @app.route('/admin/dashboard')
 
@@ -8828,15 +8104,11 @@ def admin_dashboard():
 
     peak_online = stats.peak_online if stats else 0
 
-    
-
     total_users = User.query.count()
 
     total_posts = Post.query.count()
 
     total_flux = FluxVideo.query.count()
-
-    
 
     # последние 14 дней
 
@@ -8869,8 +8141,6 @@ def admin_dashboard():
                            peak_online=peak_online, total_users=total_users,
 
                            total_posts=total_posts, total_flux=total_flux)
-
-
 
 @app.route('/admin/broadcast', methods=['POST'])
 
@@ -8910,8 +8180,6 @@ def admin_broadcast():
 
     return redirect(url_for('admin_dashboard'))
 
-
-
 @app.route('/admin/flux')
 
 @login_required
@@ -8927,8 +8195,6 @@ def admin_flux_list():
     return render_template('admin_flux.html', videos=videos,
 
                            total=len(videos), total_views=total_views)
-
-
 
 @app.route('/admin/flux/delete/<int:video_id>', methods=['POST'])
 
@@ -8952,8 +8218,6 @@ def admin_delete_flux(video_id):
 
     return redirect(url_for('admin_flux_list'))
 
-
-
 @app.route('/admin/reports')
 
 @login_required
@@ -8965,8 +8229,6 @@ def admin_reports():
     reports = Report.query.order_by(Report.timestamp.desc()).all()
 
     return render_template('reports.html', reports=reports)
-
-
 
 @app.route('/report')
 
@@ -8990,8 +8252,6 @@ def report():
 
     return redirect(request.referrer or url_for('index'))
 
-
-
 @app.route('/sessions')
 
 @login_required
@@ -9001,8 +8261,6 @@ def sessions():
     sessions = UserSession.query.filter_by(user_id=current_user.id, is_active=True).order_by(UserSession.last_seen.desc()).all()
 
     return render_template('sessions.html', sessions=sessions)
-
-
 
 @app.route('/search')
 
@@ -9046,8 +8304,6 @@ def search():
 
     return render_template('search.html', q=q, users=users, posts=posts, groups=groups)
 
-
-
 @app.route('/post/<int:post_id>')
 
 @login_required
@@ -9059,8 +8315,6 @@ def post_view(post_id):
     if not post: abort(404)
 
     return render_template('post_view.html', post=post)
-
-
 
 @app.route('/edit_post/<int:post_id>', methods=['POST'])
 
@@ -9081,8 +8335,6 @@ def edit_post(post_id):
         db.session.commit()
 
     return redirect(url_for('post_view', post_id=post_id))
-
-
 
 @app.route('/create_story', methods=['POST'])
 
@@ -9110,8 +8362,6 @@ def create_story():
 
     return redirect(url_for('index'))
 
-
-
 @app.route('/story/<int:story_id>')
 
 @login_required
@@ -9131,8 +8381,6 @@ def view_story(story_id):
         db.session.commit()
 
     return render_template('story_view.html', story=story)
-
-
 
 @app.route('/create_post', methods=['POST'])
 
@@ -9156,13 +8404,9 @@ def create_post():
 
     media_items = []
 
-    
-
     # AI модерация контента
 
     is_ok, reason = moderate_content(content)
-
-    
 
     if files:
 
@@ -9196,15 +8440,11 @@ def create_post():
 
                 image_url = media_items[0][1]
 
-    
-
     # Создание опроса
 
     poll_question = request.form.get('poll_question')
 
     poll_data = None
-
-    
 
     if poll_question:
 
@@ -9218,8 +8458,6 @@ def create_post():
 
                 options.append(opt)
 
-        
-
         if len(options) >= 2:
 
             poll_data = {
@@ -9229,8 +8467,6 @@ def create_post():
                 'options': options
 
             }
-
-            
 
     # Со-автор
 
@@ -9242,15 +8478,11 @@ def create_post():
 
     duplicate_signature = f'{content}|{len(media_items)}|{bool(poll_data)}|{co_author_user.id if co_author_user else 0}|{comments_enabled}'
 
-
-
     if recent_duplicate_signature('create_post_sig', duplicate_signature):
 
         flash("Похоже, это повторный клик по посту. Второй пост не создан.", "warning")
 
         return redirect(url_for('index'))
-
-
 
     if content or image_url or video_url or poll_data or media_items:
 
@@ -9280,13 +8512,9 @@ def create_post():
 
         db.session.flush()
 
-
-
         for mtype, url in media_items:
 
             db.session.add(PostMedia(post_id=post.id, media_url=url, media_type=mtype))
-
-        
 
         if poll_data:
 
@@ -9304,17 +8532,11 @@ def create_post():
 
             db.session.add(poll)
 
-        
-
         db.session.commit()
-
-        
 
         if not is_ok:
 
             flash(f"⚠️ Ваш пост заблокирован модерацией: {reason}", "warning")
-
-
 
         # Упоминания
 
@@ -9334,11 +8556,7 @@ def create_post():
 
             create_notification(co_author_user.id, 'collab', f'Вас добавили со‑автором поста', link=url_for('post_view', post_id=post.id), from_user_id=current_user.id)
 
-    
-
     return redirect(url_for('index'))
-
-
 
 @app.route('/delete_post/<int:post_id>', methods=['GET', 'POST'])
 
@@ -9378,8 +8596,6 @@ def delete_post(post_id):
 
     return redirect(request.referrer or url_for('index'))
 
-
-
 @app.route('/like/<int:post_id>', methods=['POST'])
 
 @login_required
@@ -9404,8 +8620,6 @@ def like_post(post_id):
 
     return redirect(request.referrer)
 
-
-
 @app.route('/add_comment/<int:post_id>', methods=['POST'])
 
 @login_required
@@ -9422,21 +8636,15 @@ def add_comment(post_id):
 
         return redirect(url_for('index'))
 
-    
-
     # AI модерация комментариев
 
     is_ok, reason = moderate_content(text)
-
-    
 
     if not consume_idempotency_token(f'comment:{post_id}', client_token):
 
         flash("Комментарий уже был отправлен. Дубликат остановлен.", "warning")
 
         return redirect(url_for('index'))
-
-
 
     if text and is_ok:
 
@@ -9470,11 +8678,7 @@ def add_comment(post_id):
 
         flash(f"⚠️ Комментарий заблокирован: {reason}", "warning")
 
-    
-
     return redirect(url_for('index'))
-
-
 
 @app.route('/flux')
 
@@ -9483,8 +8687,6 @@ def add_comment(post_id):
 def flux_feed():
 
     videos = FluxVideo.query.order_by(func.random()).limit(20).all()
-
-    
 
     video_likes = {}
 
@@ -9514,13 +8716,9 @@ def flux_feed():
 
         ]
 
-        
-
     return render_template('flux.html', videos=videos, video_likes=video_likes,
 
                            video_comments=video_comments, video_comments_data=video_comments_data)
-
-
 
 @app.route('/flux/view/<int:id>', methods=['POST'])
 
@@ -9550,8 +8748,6 @@ def track_flux_view(id):
 
     return jsonify({'ok': True})
 
-
-
 @app.route('/flux/upload', methods=['POST'])
 
 @login_required
@@ -9579,8 +8775,6 @@ def upload_flux():
             flash("Flux опубликован!", "success")
 
     return redirect(url_for('flux_feed'))
-
-
 
 @app.route('/flux/like/<int:id>', methods=['POST'])
 
@@ -9611,8 +8805,6 @@ def like_flux(id):
         db.session.commit()
 
         return jsonify({'liked': True, 'likes_count': v.likes})
-
-
 
 @app.route('/flux/comment/ajax/<int:id>', methods=['POST'])
 
@@ -9648,8 +8840,6 @@ def comment_flux_ajax(id):
 
     })
 
-
-
 @app.route('/flux/comment/<int:id>', methods=['POST'])
 
 @login_required
@@ -9666,8 +8856,6 @@ def comment_flux(id):
 
     return redirect(url_for('flux_feed'))
 
-
-
 @app.route('/delete_comment/<int:comment_id>')
 
 @login_required
@@ -9683,8 +8871,6 @@ def delete_comment(comment_id):
         db.session.commit()
 
     return redirect(url_for('index'))
-
-
 
 # Страница моих Flux-видео
 
@@ -9709,8 +8895,6 @@ def flux_my_videos():
     video_comments = {v.id: FluxComment.query.filter_by(video_id=v.id).count() for v in my_videos}
 
     return render_template('flux_my_videos.html', my_videos=my_videos, stats=stats, video_comments=video_comments)
-
-
 
 # Удалить своё Flux-видео
 
@@ -9738,8 +8922,6 @@ def delete_flux(video_id):
 
     return redirect(url_for('flux_my_videos'))
 
-
-
 @app.route('/register', methods=['GET', 'POST'])
 
 def register():
@@ -9752,15 +8934,11 @@ def register():
 
             return redirect(url_for('register'))
 
-        
-
         email = request.form.get('email')
 
         username = request.form.get('username')
 
         password = request.form.get('password')
-
-        
 
         if User.query.filter_by(email=email).first():
 
@@ -9773,8 +8951,6 @@ def register():
             flash("Этот никнейм уже занят.", "danger")
 
             return redirect(url_for('register'))
-
-        
 
         new_user = User(
 
@@ -9792,23 +8968,15 @@ def register():
 
         db.session.commit()
 
-        
-
         session['temp_user_id'] = new_user.id
 
         # Новый пользователь — TG ID нет, идём настраивать
 
         return redirect(url_for('setup_telegram'))
 
-
-
     captcha_q = generate_captcha()
 
     return render_template('auth.html', title="Регистрация", is_login=False, captcha_q=captcha_q)
-
-
-
-
 
 @app.route('/login', methods=['GET', 'POST'])
 
@@ -9822,8 +8990,6 @@ def login():
 
             return redirect(url_for('login'))
 
-            
-
         user = User.query.filter_by(username=request.form.get('username')).first()
 
         if user and check_password_hash(user.password, request.form.get('password')):
@@ -9833,8 +8999,6 @@ def login():
                 flash("Вы забанены.", "danger")
 
                 return redirect(url_for('login'))
-
-            
 
             session['temp_user_id'] = user.id
 
@@ -9856,15 +9020,9 @@ def login():
 
             flash("Неверный логин или пароль", "danger")
 
-
-
     captcha_q = generate_captcha()
 
     return render_template('auth.html', title="Вход", is_login=True, captcha_q=captcha_q)
-
-
-
-
 
 @app.route('/setup_telegram', methods=['GET', 'POST'])
 
@@ -9878,8 +9036,6 @@ def setup_telegram():
 
         return redirect(url_for('login'))
 
-
-
     if request.method == 'POST':
 
         tg_id = request.form.get('telegram_id', '').strip()
@@ -9890,8 +9046,6 @@ def setup_telegram():
 
             return redirect(url_for('setup_telegram'))
 
-
-
         user = db.session.get(User, user_id)
 
         if not user:
@@ -9900,13 +9054,9 @@ def setup_telegram():
 
             return redirect(url_for('login'))
 
-
-
         user.telegram_id = tg_id
 
         db.session.commit()
-
-
 
         if send_verification_code(user.email):
 
@@ -9919,8 +9069,6 @@ def setup_telegram():
             flash("Ошибка отправки кода", "danger")
 
             return redirect(url_for('setup_telegram'))
-
-
 
     # --- РџР РђР’РР›Р¬РќРђРЇ Р—РђР“Р РЈР—РљРђ РЁРђР‘Р›РћРќРђ (Р‘Р•Р— РћРЁРР‘РћРљ Р Р›РРЁРќР•Р“Рћ РљРћР”Рђ РќРђ Р­РљР РђРќР•) ---
 
@@ -9938,13 +9086,9 @@ def setup_telegram():
 
         from flask import render_template_string
 
-        
-
         # Определяем путь к файлу шаблона
 
         template_path = os.path.join(app.root_path, 'templates', 'setup_telegram.html')
-
-        
 
         if os.path.exists(template_path):
 
@@ -9956,11 +9100,7 @@ def setup_telegram():
 
                 return render_template_string(template_content)
 
-        
-
         return f"Критическая ошибка: файл не найден даже по пути {template_path}"
-
-
 
 @app.route('/verify_email', methods=['GET', 'POST'])
 
@@ -9984,8 +9124,6 @@ def verify_email():
 
                 login_user(user)
 
-                
-
                 # Cleanup
 
                 session.pop('temp_user_id', None)
@@ -9993,8 +9131,6 @@ def verify_email():
                 session.pop('temp_code', None)
 
                 session.pop('temp_email', None)
-
-                
 
                 token = uuid.uuid4().hex
 
@@ -10006,8 +9142,6 @@ def verify_email():
 
                 db.session.commit()
 
-                
-
                 flash("Успешный вход!", "success")
 
                 return redirect(url_for('index'))
@@ -10016,13 +9150,7 @@ def verify_email():
 
             flash("Неверный код", "danger")
 
-    
-
     return render_template('auth.html', title="Подтверждение", is_login=True, show_verify=True, captcha_q=generate_captcha())
-
-
-
-
 
 @app.route('/logout')
 
@@ -10048,8 +9176,6 @@ def logout():
 
     return redirect(url_for('login'))
 
-
-
 @app.route('/logout_all')
 
 @login_required
@@ -10065,8 +9191,6 @@ def logout_all():
     logout_user()
 
     return redirect(url_for('login'))
-
-
 
 @app.route('/confirm_email/<token>')
 
@@ -10090,15 +9214,9 @@ def confirm_email(token):
 
     return redirect(url_for('login'))
 
-
-
-
-
 # --- FONTAN AI ---
 
-
-
-def call_groq_api(messages_history):
+def call_groq_api(messages_history, model_name=None):
 
     """Вызов Groq API с таймаутом"""
 
@@ -10112,7 +9230,7 @@ def call_groq_api(messages_history):
 
     payload = {
 
-        "model": GROQ_MODEL,
+        "model": model_name or GROQ_MODEL,
 
         "messages": [{"role": "system", "content": "You are Fontan AI, an artificial model assistant of Fontan platform. If asked who you are or how you were created, answer: I am an artificial model Fontan AI. Reply in Russian, briefly and helpfully."}] + messages_history,
 
@@ -10156,8 +9274,6 @@ def call_groq_api(messages_history):
 
         return None, str(e)
 
-
-
 def get_fontan_identity_reply(user_text):
 
     text = (user_text or "").strip().lower()
@@ -10165,8 +9281,6 @@ def get_fontan_identity_reply(user_text):
     if not text:
 
         return None
-
-
 
     identity_patterns = [
 
@@ -10188,8 +9302,6 @@ def get_fontan_identity_reply(user_text):
 
     ]
 
-
-
     if any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in identity_patterns):
 
         return (
@@ -10202,11 +9314,7 @@ def get_fontan_identity_reply(user_text):
 
         )
 
-
-
     return None
-
-
 
 @app.route('/fontan_ai')
 
@@ -10216,9 +9324,23 @@ def fontan_ai():
 
     chats = AiChat.query.filter_by(user_id=current_user.id).order_by(AiChat.updated_at.desc()).all()
 
-    return render_template('fontan_ai.html', chats=chats)
+    credit_state = get_ai_credit_state(current_user, commit=True)
+    model_options = [
+        {
+            'key': model['key'],
+            'label': model['label'],
+            'cost': model['cost'],
+            'hint': model['hint'],
+        }
+        for model in AI_MODEL_OPTIONS.values()
+    ]
 
-
+    return render_template(
+        'fontan_ai.html',
+        chats=chats,
+        ai_credit_state=credit_state,
+        ai_model_options=model_options
+    )
 
 @app.route('/api/ai/new_chat', methods=['POST'])
 
@@ -10233,8 +9355,6 @@ def ai_new_chat():
     db.session.commit()
 
     return jsonify({'chat_id': chat.id, 'title': chat.title})
-
-
 
 @app.route('/api/ai/chats')
 
@@ -10253,8 +9373,6 @@ def ai_get_chats():
         'is_admin_mode': c.is_admin_mode
 
     } for c in chats])
-
-
 
 @app.route('/api/ai/chat/<int:chat_id>')
 
@@ -10286,9 +9404,12 @@ def ai_get_messages(chat_id):
 
         })
 
-    return jsonify({'messages': msgs, 'title': chat.title, 'is_admin_mode': chat.is_admin_mode})
-
-
+    return jsonify({
+        'messages': msgs,
+        'title': chat.title,
+        'is_admin_mode': chat.is_admin_mode,
+        'credits': get_ai_credit_state(current_user, commit=True)
+    })
 
 @app.route('/api/ai/send', methods=['POST'])
 
@@ -10297,18 +9418,14 @@ def ai_get_messages(chat_id):
 def ai_send_message():
 
     chat_id = request.form.get('chat_id', type=int)
-
     content = request.form.get('content', '').strip()
-
     file = request.files.get('file')
-
-
+    selected_model_key = request.form.get('model', 'fast')
+    model_config = get_ai_model_config(selected_model_key)
 
     if not chat_id:
 
         return jsonify({'error': 'Нет chat_id'}), 400
-
-
 
     chat = db.session.get(AiChat, chat_id)
 
@@ -10316,14 +9433,18 @@ def ai_send_message():
 
         return jsonify({'error': 'Доступ запрещён'}), 403
 
+    credit_state = get_ai_credit_state(current_user, commit=True)
 
+    if not chat.is_admin_mode and credit_state['balance'] < model_config['cost']:
 
-    # Rate limiting по юзеру
+        return jsonify({
+            'error': f"Недостаточно кредитов. Для модели «{model_config['label']}» нужно {model_config['cost']} кр.",
+            'credits': credit_state,
+            'required_credits': model_config['cost']
+        }), 402
 
     last_msg = AiMessage.query.filter_by(chat_id=chat_id).filter(
-
         AiMessage.role == 'user'
-
     ).order_by(AiMessage.timestamp.desc()).first()
 
     if last_msg:
@@ -10335,16 +9456,9 @@ def ai_send_message():
             wait_seconds = int(GROQ_COOLDOWN_SECONDS - diff) + 1
 
             return jsonify({
-
                 'error': f'Подожди {wait_seconds} сек',
-
                 'retry_after': wait_seconds
-
             }), 429
-
-
-
-    # Загрузка файла если есть
 
     file_url, file_type_val = None, None
 
@@ -10355,72 +9469,51 @@ def ai_send_message():
         if ext in ['png', 'jpg', 'jpeg', 'gif', 'webp']:
 
             file_url = upload_to_cloud(file, resource_type="image")
-
             file_type_val = 'image'
 
         else:
 
             file_url = upload_to_cloud(file, resource_type="raw")
-
             file_type_val = 'file'
-
-
 
     if not content and not file_url:
 
         return jsonify({'error': 'Пустое сообщение'}), 400
 
-
-
-    # Сохраняем сообщение пользователя
-
     user_msg = AiMessage(
-
-        chat_id=chat_id, role='user',
-
-        content=content, file_url=file_url, file_type=file_type_val
-
+        chat_id=chat_id,
+        role='user',
+        content=content,
+        file_url=file_url,
+        file_type=file_type_val
     )
-
     db.session.add(user_msg)
-
-
-
-    # Обновляем заголовок чата (первые слова первого сообщения)
 
     if chat.title == 'Новый чат' and content:
 
         chat.title = content[:50] + ('…' if len(content) > 50 else '')
 
-
-
     chat.updated_at = datetime.utcnow()
-
     db.session.commit()
 
-
-
-    # Если чат в режиме админа — ждём ответа вручную
+    user_msg_payload = {
+        'id': user_msg.id,
+        'role': 'user',
+        'content': content,
+        'file_url': file_url,
+        'file_type': file_type_val,
+        'timestamp': user_msg.timestamp.strftime('%H:%M')
+    }
 
     if chat.is_admin_mode:
 
         return jsonify({
-
-            'user_msg': {'id': user_msg.id, 'role': 'user', 'content': content,
-
-                         'file_url': file_url, 'file_type': file_type_val,
-
-                         'timestamp': user_msg.timestamp.strftime('%H:%M')},
-
+            'user_msg': user_msg_payload,
             'ai_msg': None,
-
-            'admin_mode': True
-
+            'admin_mode': True,
+            'credits': credit_state,
+            'selected_model': model_config['key']
         })
-
-
-
-    # Строим историю для Groq
 
     history = []
 
@@ -10430,8 +9523,6 @@ def ai_send_message():
 
             history.append({"role": m.role, "content": m.content or '[файл]'})
 
-
-
     identity_reply = get_fontan_identity_reply(content)
 
     if identity_reply:
@@ -10440,11 +9531,12 @@ def ai_send_message():
 
     else:
 
-        ai_text, error = call_groq_api(history)
+        ai_text, error = call_groq_api(history, model_config['api_model'])
 
+    should_charge = error is None and bool(ai_text)
+    credits_spent = 0
 
-
-    if error == 'timeout' or error == 'rate_limit':
+    if error in ('timeout', 'rate_limit'):
 
         ai_text = "⏳ Попробуйте позже — нейросеть сейчас не отвечает. Повтори запрос через минуту."
 
@@ -10452,31 +9544,27 @@ def ai_send_message():
 
         ai_text = "❌ Произошла ошибка. Попробуй позже."
 
+    if should_charge and spend_ai_credits(current_user, model_config['cost']):
 
+        credits_spent = model_config['cost']
 
     ai_msg = AiMessage(chat_id=chat_id, role='assistant', content=ai_text)
-
     db.session.add(ai_msg)
-
     db.session.commit()
 
-
-
     return jsonify({
-
-        'user_msg': {'id': user_msg.id, 'role': 'user', 'content': content,
-
-                     'file_url': file_url, 'file_type': file_type_val,
-
-                     'timestamp': user_msg.timestamp.strftime('%H:%M')},
-
-        'ai_msg': {'id': ai_msg.id, 'role': 'assistant', 'content': ai_text,
-
-                   'timestamp': ai_msg.timestamp.strftime('%H:%M')}
-
+        'user_msg': user_msg_payload,
+        'ai_msg': {
+            'id': ai_msg.id,
+            'role': 'assistant',
+            'content': ai_text,
+            'timestamp': ai_msg.timestamp.strftime('%H:%M'),
+            'model': model_config['key']
+        },
+        'credits': get_ai_credit_state(current_user),
+        'credits_spent': credits_spent,
+        'selected_model': model_config['key']
     })
-
-
 
 @app.route('/api/ai/delete_chat/<int:chat_id>', methods=['POST'])
 
@@ -10494,8 +9582,6 @@ def ai_delete_chat(chat_id):
 
     return jsonify({'ok': True})
 
-
-
 # --- ADMIN AI FUNCTIONS ---
 
 @app.route('/admin/ai_chats')
@@ -10509,8 +9595,6 @@ def admin_ai_chats():
     chats = AiChat.query.order_by(AiChat.updated_at.desc()).all()
 
     return render_template('admin_ai_chats.html', chats=chats)
-
-
 
 @app.route('/admin/ai_mode/<int:chat_id>', methods=['POST'])
 
@@ -10531,8 +9615,6 @@ def admin_ai_toggle_mode(chat_id):
         return jsonify({'is_admin_mode': chat.is_admin_mode})
 
     return jsonify({'error': 'Not found'}), 404
-
-
 
 @app.route('/admin/ai_reply/<int:chat_id>', methods=['POST'])
 
@@ -10576,8 +9658,6 @@ def admin_ai_reply(chat_id):
 
     return jsonify({'ok': True})
 
-
-
 @socketio.on('join_ai_chat')
 
 def on_join_ai_chat(data):
@@ -10585,8 +9665,6 @@ def on_join_ai_chat(data):
     chat_id = data.get('chat_id')
 
     join_room(f"ai_chat_{chat_id}")
-
-
 
 # --- SOCKET.IO ---
 
@@ -10614,8 +9692,6 @@ def on_connect():
 
         emit('user_status', {'user_id': current_user.id, 'status': 'online'}, broadcast=True)
 
-
-
 @socketio.on('disconnect')
 
 def on_disconnect():
@@ -10628,8 +9704,6 @@ def on_disconnect():
 
         emit('user_status', {'user_id': current_user.id, 'status': 'offline'}, broadcast=True)
 
-
-
 @socketio.on('join')
 
 def on_join(data):
@@ -10637,8 +9711,6 @@ def on_join(data):
     room = data.get('room')
 
     join_room(room)
-
-
 
 @socketio.on('join_user_room')
 
@@ -10648,8 +9720,6 @@ def on_join_user_room(data):
 
     join_room(f"user_{int(user_id)}")
 
-
-
 @socketio.on('typing')
 
 def on_typing(data):
@@ -10658,15 +9728,11 @@ def on_typing(data):
 
     emit('typing', data, to=room)
 
-
-
 @socketio.on('presence')
 
 def on_presence(data):
 
     emit('presence', {'user_id': current_user.id, 'online': data.get('online', True)}, broadcast=True)
-
-
 
 @socketio.on('call_invite')
 
@@ -10692,8 +9758,6 @@ def on_call_invite(data):
 
     }, to=f"user_{int(to_user_id)}")
 
-
-
 @socketio.on('call_accept')
 
 def on_call_accept(data):
@@ -10714,8 +9778,6 @@ def on_call_accept(data):
 
     }, to=f"user_{int(to_user_id)}")
 
-
-
 @socketio.on('call_decline')
 
 def on_call_decline(data):
@@ -10734,8 +9796,6 @@ def on_call_decline(data):
 
     }, to=f"user_{int(to_user_id)}")
 
-
-
 @socketio.on('call_end')
 
 def on_call_end(data):
@@ -10753,8 +9813,6 @@ def on_call_end(data):
         'reason': data.get('reason', 'Звонок завершён')
 
     }, to=f"user_{int(to_user_id)}")
-
-
 
 @socketio.on('call_signal')
 
@@ -10776,15 +9834,11 @@ def on_call_signal(data):
 
     }, to=f"user_{int(to_user_id)}")
 
-
-
 # --- РЎРћР—Р”РђРќРР• РўРђР‘Р›РР¦ Р РђР”РњРРќРђ ---
 
 with app.app_context():
 
     db.create_all()
-
-    
 
     # --- Р’Р Р•РњР•РќРќР«Р™ Р¤РРљРЎ Р‘РђР—Р« Р”РђРќРќР«РҐ (Р›Р•Р§Р•РќРР• РћРЁРР‘РљР) ---
 
@@ -10808,8 +9862,6 @@ with app.app_context():
 
             conn.execute(text("ALTER TABLE posts ADD COLUMN IF NOT EXISTS client_token VARCHAR(80);"))
 
-
-
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS banner VARCHAR(300);"))
 
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS color_theme VARCHAR(20) DEFAULT 'blue';"))
@@ -10817,8 +9869,6 @@ with app.app_context():
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();"))
 
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen TIMESTAMP DEFAULT NOW();"))
-
-
 
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS email_confirmed BOOLEAN DEFAULT FALSE;"))
 
@@ -10829,8 +9879,10 @@ with app.app_context():
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS total_visits INTEGER DEFAULT 0;"))
 
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_id VARCHAR(100);"))
-
-
+            conn.execute(text(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_credits INTEGER DEFAULT {AI_DAILY_CREDITS};"))
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_credits_reset_at TIMESTAMP DEFAULT NOW();"))
+            conn.execute(text(f"UPDATE users SET ai_credits = {AI_DAILY_CREDITS} WHERE ai_credits IS NULL;"))
+            conn.execute(text("UPDATE users SET ai_credits_reset_at = NOW() WHERE ai_credits_reset_at IS NULL;"))
 
             conn.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS edited_at TIMESTAMP;"))
 
@@ -10846,13 +9898,9 @@ with app.app_context():
 
             conn.execute(text("ALTER TABLE comments ADD COLUMN IF NOT EXISTS client_token VARCHAR(80);"))
 
-
-
             conn.execute(text("ALTER TABLE groups ADD COLUMN IF NOT EXISTS description VARCHAR(300);"))
 
             conn.execute(text("ALTER TABLE groups ADD COLUMN IF NOT EXISTS is_private BOOLEAN DEFAULT FALSE;"))
-
-
 
             # FontanAI tables
 
@@ -10908,8 +9956,6 @@ with app.app_context():
 
     # ---------------------------------------------------
 
-
-
     # Создание админа
 
     admin = User.query.filter_by(username='admin').first()
@@ -10941,8 +9987,6 @@ with app.app_context():
         db.session.commit()
 
         print("Админ создан: admin / 12we1qtr11")
-
-
 
 if __name__ == '__main__':
 
