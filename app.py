@@ -131,42 +131,32 @@ WEBRTC_ICE_SERVERS = [
 
 from sqlalchemy.pool import NullPool
 
-# Supabase Transaction Pooler URL (IPv4, работает на Render)
-import os
-from sqlalchemy.pool import NullPool
-from flask_sqlalchemy import SQLAlchemy
-from flask_login import LoginManager
-from flask_socketio import SocketIO
-import cloudinary
-
-
-import os
-import cloudinary
-from sqlalchemy import text
-from sqlalchemy.pool import NullPool
-from flask_sqlalchemy import SQLAlchemy
-from flask_login import LoginManager, current_user
-from flask_socketio import SocketIO
-from flask import session, request
-
-# --- 1. ФИНАЛЬНАЯ НАСТРОЙКА (БЕЗ ДУБЛИРОВАНИЯ АРГУМЕНТОВ) ---
-# Оставляем пустой префикс, чтобы избежать ошибки "database and dbname"
-app.config['SQLALCHEMY_DATABASE_URI'] = "postgresql://" 
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-
-app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-    "poolclass": NullPool,
-    "connect_args": {
-        "user": "postgres.apbtrkzzvnpogpttgbpg",
-        "password": "FontanAdmin2026",
-        "host": "aws-0-eu-central-1.pooler.supabase.com",
-        "port": 6543,
-        "database": "postgres",
-        "sslmode": "require",
-        # options передаем строкой, это важно для psycopg2
-        "options": "-c prepare_threshold=0"
+# --- 1. НАСТРОЙКА БАЗЫ ДАННЫХ ---
+# Приоритет: env var DATABASE_URL (Render) > Supabase fallback
+_db_url = os.environ.get('DATABASE_URL', '')
+if _db_url:
+    # Render иногда даёт устаревший postgres:// — фиксим
+    if _db_url.startswith('postgres://'):
+        _db_url = _db_url.replace('postgres://', 'postgresql://', 1)
+    app.config['SQLALCHEMY_DATABASE_URI'] = _db_url
+    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {"poolclass": NullPool}
+else:
+    # Supabase Transaction Pooler (IPv4, работает на Render free tier)
+    _sb_user = quote_plus("postgres.apbtrkzzvnpogpttgbpg")
+    _sb_pass = quote_plus("FontanAdmin2026")
+    _sb_host = "aws-0-eu-central-1.pooler.supabase.com"
+    _sb_port = "6543"
+    _sb_db   = "postgres"
+    app.config['SQLALCHEMY_DATABASE_URI'] = (
+        f"postgresql+psycopg2://{_sb_user}:{_sb_pass}"
+        f"@{_sb_host}:{_sb_port}/{_sb_db}?sslmode=require"
+    )
+    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+        "poolclass": NullPool,
+        "connect_args": {"options": "-c prepare_threshold=0"},
     }
-}
+
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 # --- 2. ИНИЦИАЛИЗАЦИЯ ---
 db.init_app(app)
@@ -201,8 +191,6 @@ def track_visitor():
         
     try:
         if not session.get('tracked_visitor'):
-            # Ленивый импорт модели внутри функции
-            from app import SiteStats 
             stats = db.session.query(SiteStats).first()
             if stats:
                 stats.total_visitors = (stats.total_visitors or 0) + 1
@@ -256,17 +244,6 @@ def send_verification_code(email):
     return True
 
 # --- РРќРР¦РРђР›РР—РђР¦РРЇ Р‘Р” ---
-
-with app.app_context():
-
-    try:
-
-        db.create_all()
-
-    except:
-
-        pass
-
 # --- РњРћР”Р•Р›Р Р”РђРќРќР«РҐ ---
 
 # --- РћРЎРўРђР›Р¬РќР«Р• РљРћРќРЎРўРђРќРўР« Р Р¤РЈРќРљР¦РР ---
