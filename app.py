@@ -129,21 +129,46 @@ WEBRTC_ICE_SERVERS = [
 # postgresql://postgres.apbtrkzzvnpogpttgbpg:PASSWORD@aws-0-us-east-1.pooler.supabase.com:6543/postgres
 # Найти свой URL: Supabase → Project Settings → Database → Transaction pooler
 
+import os
+import socket
+from sqlalchemy import text
 from sqlalchemy.pool import NullPool
+from flask_login import LoginManager
+from flask_socketio import SocketIO
+import cloudinary
+from urllib.parse import urlparse, urlunparse
 
-# --- 1. НАСТРОЙКА БАЗЫ ДАННЫХ ---
-# Приоритет: env var DATABASE_URL (Render) > Supabase fallback
-# Supabase Transaction Pooler — IPv4, порт 6543, работает на Render free tier
-# username ОБЯЗАТЕЛЬНО = postgres.PROJECT_REF (не просто postgres!)
+# --- 1. ФУНКЦИЯ ОБХОДА IPv6 (ДЛЯ RENDER) ---
+def get_ipv4_uri(uri):
+    """Принудительно переводит буквенный хост в цифровой IPv4 адрес"""
+    try:
+        p = urlparse(uri)
+        if not p.hostname:
+            return uri
+        # Превращаем db.xxx.supabase.co в обычный IP (например 18.x.x.x)
+        ipv4 = socket.gethostbyname(p.hostname)
+        # Собираем URL обратно с цифрами вместо букв
+        new_netloc = f"{p.username}:{p.password}@{ipv4}:{p.port}"
+        return urlunparse(p._replace(netloc=new_netloc))
+    except Exception as e:
+        print(f">>> [FONTAN] Ошибка резолва IP: {e}")
+        return uri
+
+# --- 2. НАСТРОЙКА БАЗЫ ДАННЫХ ---
+# Прямой адрес базы (порт 5432) — самый стабильный вариант
 DEFAULT_URL = (
     "postgresql+psycopg2://postgres:fontan20261"
-    "@aws-0-eu-central-1.pooler.supabase.com:5432/postgres"
+    "@db.apbtrkzzvnpogpttgbpg.supabase.co:5432/postgres"
     "?sslmode=require"
 )
 
-db_url = os.environ.get('DATABASE_URL', DEFAULT_URL)
+# Берем из Render или используем наш DEFAULT
+raw_url = os.environ.get('DATABASE_URL', DEFAULT_URL)
 
-# Исправляем формат протокола (Render иногда дает postgres:// вместо postgresql://)
+# Магия: превращаем хост в IP, чтобы не было ошибки "Network is unreachable"
+db_url = get_ipv4_uri(raw_url)
+
+# Фикс протокола для SQLAlchemy
 if db_url.startswith("postgres://"):
     db_url = db_url.replace("postgres://", "postgresql://", 1)
 
@@ -151,14 +176,14 @@ app.config['SQLALCHEMY_DATABASE_URI'] = db_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {"poolclass": NullPool}
 
-# --- 2. ИНИЦИАЛИЗАЦИЯ ---
+# --- 3. ИНИЦИАЛИЗАЦИЯ СЕРВИСОВ ---
 db.init_app(app)
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 socketio = SocketIO(app, async_mode='gevent', cors_allowed_origins="*")
 
-# --- 3. CLOUDINARY ---
+# --- 4. CLOUDINARY ---
 cloudinary.config(
     cloud_name='daz4839e7', 
     api_key='371541773313745', 
@@ -166,19 +191,23 @@ cloudinary.config(
     secure=True
 )
 
-# --- 4. БЕЗОПАСНЫЙ ЗАПУСК ---
+# --- 5. БЕЗОПАСНЫЙ ЗАПУСК С ПРОВЕРКОЙ ---
 with app.app_context():
     try:
-        print(">>> [FONTAN] ПОДКЛЮЧЕНИЕ К SUPABASE POOLER")
+        # Печатаем IP в лог, чтобы видеть куда реально стучимся
+        target_host = urlparse(db_url).hostname
+        print(f">>> [FONTAN] ПОПЫТКА ПОДКЛЮЧЕНИЯ К IP: {target_host}")
+        
         db.session.execute(text('SELECT 1'))
         db.session.commit()
         db.create_all()
-        print(">>> [FONTAN] SUCCESS: SUPABASE ПОДКЛЮЧЕН!")
+        print(">>> [FONTAN] SUCCESS: СВЯЗЬ С БАЗОЙ УСТАНОВЛЕНА!")
     except Exception as e:
+        db.session.rollback()
         print(f">>> [FONTAN] DB STARTUP ERROR: {e}")
-        print(">>> [FONTAN] Приложение продолжает работу без DB...")
+        print(">>> [FONTAN] Приложение запускается БЕЗ БАЗЫ (оффлайн режим)...")
 
-# --- 5. ТРЕКЕР ПОСЕТИТЕЛЕЙ (ФИКС КОНТЕКСТА) ---
+# --- 6. ТРЕКЕР ПОСЕТИТЕЛЕЙ ---
 @app.before_request
 def track_visitor():
     if request.method == 'HEAD' or request.path == '/healthcheck':
@@ -197,8 +226,7 @@ def track_visitor():
                 db.session.commit()
                 session['tracked_visitor'] = True
     except Exception as e:
-        if 'db' in globals():
-            db.session.rollback()
+        db.session.rollback()
         print(f">>> [FONTAN] Visitor tracking paused: {e}")
 # --- Р’РЎРџРћРњРћР“РђРўР•Р›Р¬РќР«Р• Р¤РЈРќРљР¦РР ---
 
