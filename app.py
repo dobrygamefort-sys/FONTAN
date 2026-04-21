@@ -137,7 +137,7 @@ from sqlalchemy.pool import NullPool
 # username ОБЯЗАТЕЛЬНО = postgres.PROJECT_REF (не просто postgres!)
 DEFAULT_URL = (
     "postgresql+psycopg2://postgres:fontan20261"
-    "@db.apbtrkzzvnpogpttgbpg.supabase.co:5432/postgres"
+    "@aws-0-eu-central-1.pooler.supabase.com:5432/postgres"
     "?sslmode=require"
 )
 
