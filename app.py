@@ -129,9 +129,8 @@ WEBRTC_ICE_SERVERS = [
 # postgresql://postgres.apbtrkzzvnpogpttgbpg:PASSWORD@aws-0-us-east-1.pooler.supabase.com:6543/postgres
 # Найти свой URL: Supabase → Project Settings → Database → Transaction pooler
 import os
-import urllib.parse
 from sqlalchemy import text
-from sqlalchemy.pool import NullPool
+from sqlalchemy.pool import QueuePool
 from flask_socketio import SocketIO
 from flask_login import LoginManager
 import cloudinary
@@ -139,25 +138,25 @@ import cloudinary
 # --- 1. ПОРТ ДЛЯ RENDER ---
 port = int(os.environ.get("PORT", 10000))
 
-# --- 2. КОНФИГУРАЦИЯ БАЗЫ (CLEAN FIX) ---
+# --- 2. КОНФИГУРАЦИЯ БАЗЫ (DIRECT MODE - БЕЗ ПУЛЕРА) ---
+# Прямое подключение — самое надежное, оно не выдает 'Tenant not found'
 PROJECT_ID = "apbtrkzzvnpogpttgbpg"
 DB_PASS = "fontan20261"
-# Кодируем только пароль, чтобы спецсимволы не ломали URI
-encoded_pass = urllib.parse.quote_plus(DB_PASS)
-DB_USER = f"postgres.{PROJECT_ID}" 
-DB_HOST = "aws-0-eu-central-1.pooler.supabase.com" 
+DB_USER = "postgres"
+# Прямой хост базы данных Supabase
+DB_HOST = f"db.{PROJECT_ID}.supabase.co"
 DB_NAME = "postgres"
 
-# Убрали prepared_statements, оставили только самое важное
-fixed_uri = (
-    f"postgresql://{DB_USER}:{encoded_pass}@{DB_HOST}:6543/{DB_NAME}"
-    f"?sslmode=require&options=project%3D{PROJECT_ID}"
-)
+# Чистый URI без лишних наворотов, порт 5432 (Direct)
+fixed_uri = f"postgresql://{DB_USER}:{DB_PASS}@{DB_HOST}:5432/{DB_NAME}?sslmode=require"
 
 app.config['SQLALCHEMY_DATABASE_URI'] = fixed_uri
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-    "poolclass": NullPool,
+    "pool_size": 10,
+    "max_overflow": 20,
+    "pool_timeout": 30,
+    "pool_recycle": 1800,
     "connect_args": {
         "connect_timeout": 30,
         "application_name": "fontan_app"
@@ -183,15 +182,15 @@ cloudinary.config(
 # --- 5. ПРОВЕРКА ПРИ СТАРТЕ ---
 with app.app_context():
     try:
-        print(f">>> [FONTAN] ПОДКЛЮЧЕНИЕ ЧЕРЕЗ ПУЛЕР (6543): {PROJECT_ID}")
+        print(f">>> [FONTAN] ПРЯМОЕ ПОДКЛЮЧЕНИЕ К: {DB_HOST}")
         db.session.execute(text('SELECT 1'))
         db.session.commit()
-        print(">>> [FONTAN] SUCCESS: База данных (Пулер) отвечает!")
+        print(">>> [FONTAN] SUCCESS: Прямая связь с базой установлена!")
         db.create_all()
     except Exception as e:
         if 'db' in globals(): db.session.rollback()
-        print(f">>> [FONTAN] ОШИБКА БАЗЫ: {str(e)}")
-
+        print(f">>> [FONTAN] ОШИБКА: {str(e)}")
+        print(">>> СОВЕТ: Если пишет 'Connection refused', проверь пароль в Supabase Settings -> Database!")
 # --- ЗАПУСК (В САМОМ КОНЦЕ ФАЙЛА) ---
 # if __name__ == '__main__':
 #     socketio.run(app, host='0.0.0.0', port=port)
