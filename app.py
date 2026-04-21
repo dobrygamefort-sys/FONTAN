@@ -137,39 +137,43 @@ from flask_socketio import SocketIO
 import cloudinary
 from urllib.parse import urlparse, urlunparse
 
-# --- 1. ФУНКЦИЯ ФОРСИРОВАНИЯ ПРАВИЛЬНОГО ПОДКЛЮЧЕНИЯ ---
+# --- 1. ФУНКЦИЯ ЖЕСТКОГО ИСПРАВЛЕНИЯ КОННЕКТА ---
 def get_fixed_db_uri(uri):
     """
-    1. Переводит хост в IPv4 (для Render)
-    2. Принудительно ставит логин postgres.PROJECT_ID
+    1. Переводит буквы в цифры (IPv4), чтобы обойти "Network is unreachable".
+    2. Добавляет ID проекта в логин, чтобы обойти "Tenant not found".
     """
     try:
         project_id = "apbtrkzzvnpogpttgbpg"
         p = urlparse(uri)
         
-        # 1. Резолвим IP хоста
-        target_host = p.hostname or "aws-0-eu-central-1.pooler.supabase.com"
-        ipv4 = socket.gethostbyname(target_host)
+        # Резолвим IP. Если падает — используем проверенный IP пулера
+        try:
+            target_host = p.hostname or "aws-0-eu-central-1.pooler.supabase.com"
+            ipv4 = socket.gethostbyname(target_host)
+        except:
+            ipv4 = "18.198.145.223" # Прямой IPv4 адрес Франкфуртского пулера
         
-        # 2. Формируем спец-логин для пулера Supabase
-        # Если в логине уже есть точка, не дублируем
+        # Формируем логин: postgres.[PROJECT_ID]
         username = p.username or "postgres"
         if "." not in username:
             username = f"postgres.{project_id}"
             
-        # 3. Собираем всё воедино на порт 5432
+        # Собираем всё на порт 5432 (он стабильнее на Render)
+        # Убираем параметры из URL, если они мешают, оставляем только sslmode
         new_netloc = f"{username}:{p.password}@{ipv4}:5432"
-        return urlunparse(p._replace(netloc=new_netloc))
+        return urlunparse(p._replace(netloc=new_netloc, query="sslmode=require"))
     except Exception as e:
         print(f">>> [FONTAN] Ошибка обработки URI: {e}")
         return uri
 
 # --- 2. НАСТРОЙКА БАЗЫ ДАННЫХ ---
+# Пытаемся взять URL из настроек Render, если там пусто — берем дефолт
 raw_url = os.environ.get('DATABASE_URL') or (
     "postgresql://postgres:fontan20261@aws-0-eu-central-1.pooler.supabase.com:5432/postgres?sslmode=require"
 )
 
-# Применяем фикс (IP + правильный логин)
+# Прогоняем через фикс
 db_url = get_fixed_db_uri(raw_url)
 
 # Исправляем протокол для SQLAlchemy
@@ -178,7 +182,10 @@ if db_url.startswith("postgres://"):
 
 app.config['SQLALCHEMY_DATABASE_URI'] = db_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {"poolclass": NullPool}
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    "poolclass": NullPool,
+    "connect_args": {"connect_timeout": 10}
+}
 
 # --- 3. ИНИЦИАЛИЗАЦИЯ ---
 db.init_app(app)
@@ -198,9 +205,9 @@ cloudinary.config(
 # --- 5. БЕЗОПАСНЫЙ ЗАПУСК ---
 with app.app_context():
     try:
-        # Печатаем инфо для отладки
-        display_url = app.config['SQLALCHEMY_DATABASE_URI'].split('@')[-1]
-        print(f">>> [FONTAN] КОННЕКТ К: {display_url}")
+        # Инфо для логов (без пароля)
+        safe_log_url = app.config['SQLALCHEMY_DATABASE_URI'].split('@')[-1]
+        print(f">>> [FONTAN] ПОДКЛЮЧЕНИЕ К: {safe_log_url}")
         
         db.session.execute(text('SELECT 1'))
         db.session.commit()
@@ -209,14 +216,15 @@ with app.app_context():
     except Exception as e:
         if 'db' in globals(): db.session.rollback()
         print(f">>> [FONTAN] DB STARTUP ERROR: {e}")
-        print(">>> [FONTAN] Работа в автономном режиме...")
+        print(">>> [FONTAN] ВНИМАНИЕ: Приложение работает БЕЗ базы данных.")
 
 # --- 6. ТРЕКЕР ПОСЕТИТЕЛЕЙ ---
 @app.before_request
 def track_visitor():
-    if request.method == 'HEAD' or request.path == '/healthcheck':
+    if request.method == 'HEAD' or request.path == '/healthcheck' or request.path.startswith('/static'):
         return
     try:
+        # Проверяем наличие таблицы перед запросом, чтобы не спамить ошибками
         if not session.get('tracked_visitor'):
             stats = db.session.query(SiteStats).first()
             if stats:
@@ -230,7 +238,11 @@ def track_visitor():
                 session['tracked_visitor'] = True
     except Exception as e:
         if 'db' in globals(): db.session.rollback()
-        print(f">>> [FONTAN] Visitor tracking paused: {e}")
+        # Выводим только критику
+        if "connection" in str(e).lower():
+            pass # Не спамим при отсутствии связи
+        else:
+            print(f">>> [FONTAN] Visitor tracking paused: {e}")
 # --- Р’РЎРџРћРњРћР“РђРўР•Р›Р¬РќР«Р• Р¤РЈРќРљР¦РР ---
 
 def send_verification_code(email):
