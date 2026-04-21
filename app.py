@@ -135,12 +135,19 @@ from sqlalchemy.pool import NullPool
 # Приоритет: env var DATABASE_URL (Render) > Supabase fallback
 # Supabase Transaction Pooler — IPv4, порт 6543, работает на Render free tier
 # username ОБЯЗАТЕЛЬНО = postgres.PROJECT_REF (не просто postgres!)
-SUPABASE_URL = (
+DEFAULT_URL = (
     "postgresql+psycopg2://postgres:fontan20261"
-    "@aws-0-eu-central-1.pooler.supabase.com:6543/postgres"
-    "?sslmode=require&options=project%3Dapbtrkzzvnpogpttgbpg"
+    "@db.apbtrkzzvnpogpttgbpg.supabase.co:5432/postgres"
+    "?sslmode=require"
 )
-app.config['SQLALCHEMY_DATABASE_URI'] = SUPABASE_URL
+
+db_url = os.environ.get('DATABASE_URL', DEFAULT_URL)
+
+# Исправляем формат протокола (Render иногда дает postgres:// вместо postgresql://)
+if db_url.startswith("postgres://"):
+    db_url = db_url.replace("postgres://", "postgresql://", 1)
+
+app.config['SQLALCHEMY_DATABASE_URI'] = db_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {"poolclass": NullPool}
 
