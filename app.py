@@ -129,45 +129,56 @@ WEBRTC_ICE_SERVERS = [
 # postgresql://postgres.apbtrkzzvnpogpttgbpg:PASSWORD@aws-0-us-east-1.pooler.supabase.com:6543/postgres
 # Найти свой URL: Supabase → Project Settings → Database → Transaction pooler
 import os
+import urllib.parse
 from sqlalchemy import text
 from sqlalchemy.pool import NullPool
 from flask_socketio import SocketIO
 from flask_login import LoginManager
 import cloudinary
 
-# --- 1. ПОРТ ДЛЯ RENDER ---
+# --- 1. ПОРТ И ОКРУЖЕНИЕ ---
 port = int(os.environ.get("PORT", 10000))
 
-# --- 2. КОНФИГУРАЦИЯ БАЗЫ (DIRECT CONNECTION FIX) ---
-# Мы меняем хост на прямой адрес базы и используем стандартный порт 5432
+# --- 2. КОНФИГУРАЦИЯ БАЗЫ ДАННЫХ (SUPABASE POOLER FIX) ---
+# Используем порт 6543, так как прямой 5432 на Render выдает "Network is unreachable"
 PROJECT_ID = "apbtrkzzvnpogpttgbpg"
-DB_USER = "postgres" 
 DB_PASS = "fontan20261"
-DB_HOST = f"db.{PROJECT_ID}.supabase.co" # Прямой хост базы
+# Для порта 6543 ОБЯЗАТЕЛЬНО использовать формат логина postgres.[PROJECT_ID]
+DB_USER = f"postgres.{PROJECT_ID}"
+DB_HOST = "aws-0-eu-central-1.pooler.supabase.com"
 DB_NAME = "postgres"
 
-# Прямое подключение через 5432 порт (не через пулер!)
-fixed_uri = f"postgresql://{DB_USER}:{DB_PASS}@{DB_HOST}:5432/{DB_NAME}?sslmode=require"
+# Кодируем пароль для безопасности URI
+encoded_pass = urllib.parse.quote_plus(DB_PASS)
+
+# СТРОКА ПОДКЛЮЧЕНИЯ:
+# prepared_statements=false КРИТИЧЕСКИ ВАЖНО для Transaction Mode пулера
+fixed_uri = (
+    f"postgresql://{DB_USER}:{encoded_pass}@{DB_HOST}:6543/{DB_NAME}"
+    f"?sslmode=require&prepared_statements=false"
+)
 
 app.config['SQLALCHEMY_DATABASE_URI'] = fixed_uri
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-    "poolclass": NullPool,
+    "poolclass": NullPool,  # Отключаем пул на стороне Flask, доверяем пулеру Supabase
     "connect_args": {
         "connect_timeout": 30,
         "application_name": "fontan_app"
     }
 }
 
-# --- 3. ИНИЦИАЛИЗАЦИЯ ---
+# --- 3. ИНИЦИАЛИЗАЦИЯ СЕРВИСОВ ---
 db.init_app(app)
+
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 
+# SocketIO с поддержкой gevent для Render
 socketio = SocketIO(app, async_mode='gevent', cors_allowed_origins="*")
 
-# --- 4. CLOUDINARY ---
+# --- 4. CLOUDINARY CONFIG ---
 cloudinary.config(
     cloud_name='daz4839e7', 
     api_key='371541773313745', 
@@ -175,17 +186,24 @@ cloudinary.config(
     secure=True
 )
 
-# --- 5. ПРОВЕРКА ПРИ СТАРТЕ ---
+# --- 5. ПРОВЕРКА ПОДКЛЮЧЕНИЯ ПРИ ЗАПУСКЕ ---
 with app.app_context():
     try:
-        print(f">>> [FONTAN] ПРЯМОЕ ПОДКЛЮЧЕНИЕ К БАЗЕ: {DB_HOST}")
+        print(f">>> [FONTAN] ПОПЫТКА ПОДКЛЮЧЕНИЯ К ПУЛЕРУ: {DB_HOST}")
+        # Выполняем тестовый запрос
         db.session.execute(text('SELECT 1'))
         db.session.commit()
-        print(">>> [FONTAN] SUCCESS: Прямая связь установлена!")
+        print(">>> [FONTAN] SUCCESS: База данных авторизована и отвечает!")
+        
+        # Создаем таблицы, если их нет
         db.create_all()
+        print(">>> [FONTAN] База данных проверена, таблицы готовы.")
+        
     except Exception as e:
-        if 'db' in globals(): db.session.rollback()
-        print(f">>> [FONTAN] ОШИБКА: {str(e)}")
+        if 'db' in globals():
+            db.session.rollback()
+        print(f">>> [FONTAN] КРИТИЧЕСКАЯ ОШИБКА БАЗЫ: {str(e)}")
+        print(">>> СОВЕТ: Проверь, что в Supabase Settings -> Database включен Connection Pooling (Transaction mode).")
 # --- ЗАПУСК (В САМОМ КОНЦЕ ФАЙЛА) ---
 # if __name__ == '__main__':
 #     socketio.run(app, host='0.0.0.0', port=port)
