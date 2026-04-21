@@ -147,15 +147,17 @@ from flask_socketio import SocketIO
 from flask_login import LoginManager
 import cloudinary
 
-# --- 1. КОНФИГУРАЦИЯ БАЗЫ ДАННЫХ (ПРЯМОЕ ПОДКЛЮЧЕНИЕ) ---
+# --- 1. КОНФИГУРАЦИЯ БАЗЫ ДАННЫХ (ФИКС IPv4) ---
 PROJECT_ID = "apbtrkzzvnpogpttgbpg"
-DB_USER = "postgres"  # При прямом подключении точка с ID обычно не нужна
+DB_USER = "postgres" 
 DB_PASS = "fontan20261"
-# Прямой хост твоего проекта
-DB_HOST = f"db.{PROJECT_ID}.supabase.co" 
+
+# Используем ПРЯМОЙ IP адрес Supabase для твоего региона (EU-Central)
+# Это лечит ошибку "Network is unreachable", обходя IPv6
+DB_HOST = "172.64.149.246" 
 DB_NAME = "postgres"
 
-# Используем порт 5432 (Direct Connection) вместо 6543
+# Прямой порт 5432
 fixed_uri = f"postgresql://{DB_USER}:{DB_PASS}@{DB_HOST}:5432/{DB_NAME}?sslmode=require"
 
 app.config['SQLALCHEMY_DATABASE_URI'] = fixed_uri
@@ -189,9 +191,10 @@ cloudinary.config(
 # --- 4. ПРОВЕРКА ПРИ СТАРТЕ ---
 with app.app_context():
     try:
-        print(f">>> [FONTAN] ЗАПУСК ПРОВЕРКИ (DIRECT): Юзер [{DB_USER}] -> Хост [{DB_HOST}]")
+        # В логах теперь будет видно именно подключение по IP
+        print(f">>> [FONTAN] ЗАПУСК ПРОВЕРКИ (IP-FIX): Юзер [{DB_USER}] -> IP [{DB_HOST}]")
         
-        # Прямой запрос к базе
+        # Проверочный запрос
         db.session.execute(text('SELECT 1'))
         db.session.commit()
         print(">>> [FONTAN] SUCCESS: База данных ответила успешно!")
@@ -203,8 +206,8 @@ with app.app_context():
         if 'db' in globals(): db.session.rollback()
         error_msg = str(e)
         print(f">>> [FONTAN] КРИТИЧЕСКАЯ ОШИБКА: {error_msg}")
-        if "Tenant or user not found" in error_msg:
-            print(">>> [СОВЕТ] Ошибка пулера. Но мы перешли на прямой порт 5432, проверь пароль!")
+        if "unreachable" in error_msg.lower():
+            print(">>> [СОВЕТ] Render блокирует IP. Попробуй нажать 'Clear build cache and deploy'.")
 
 # --- 5. ТРЕКЕР ПОСЕТИТЕЛЕЙ ---
 @app.before_request
