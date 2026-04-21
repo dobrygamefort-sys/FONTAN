@@ -192,12 +192,10 @@ from flask import session, request
 # чтобы избежать ошибки "Network is unreachable" на Render.
 # Твоя точная ссылка на Supabase (Франкфурт)
 # Мы прописываем её напрямую, чтобы Render не подсунул старый Neon
-SUPABASE_URL = "postgresql://postgres.apbtrkzzvnpogpttgbpg:FontanAdmin2026@aws-0-eu-central-1.pooler.supabase.com:6543/postgres?prepare_threshold=0"
+DB_URL = "postgresql://postgres.apbtrkzzvnpogpttgbpg:FontanAdmin2026@52.59.152.35:5432/postgres"
 
-app.config['SQLALCHEMY_DATABASE_URI'] = SUPABASE_URL
+app.config['SQLALCHEMY_DATABASE_URI'] = DB_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-
-# Важные настройки для пулера
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     "poolclass": NullPool,
     "connect_args": {
@@ -206,14 +204,14 @@ app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     }
 }
 
-# --- 2. ИНИЦИАЛИЗАЦИЯ РАСШИРЕНИЙ ---
+# --- 2. ИНИЦИАЛИЗАЦИЯ ---
 db.init_app(app)
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 socketio = SocketIO(app, async_mode='gevent', cors_allowed_origins="*")
 
-# --- 3. CLOUDINARY CONFIG ---
+# --- 3. CLOUDINARY ---
 cloudinary.config(
     cloud_name='daz4839e7', 
     api_key='371541773313745', 
@@ -221,25 +219,24 @@ cloudinary.config(
     secure=True
 )
 
-# --- 4. БЕЗОПАСНЫЙ СТАРТ (Внутри контекста) ---
+# --- 4. БЕЗОПАСНЫЙ ЗАПУСК ---
 with app.app_context():
     try:
-        print(">>> [FONTAN] ПОДКЛЮЧЕНИЕ ПО IP: 52.59.152.35 (FRANKFURT)")
+        print(">>> [FONTAN] ПОДКЛЮЧЕНИЕ ПО IP (PORT 5432): 52.59.152.35")
+        # Проверяем связь простым запросом
         db.session.execute(text('SELECT 1'))
         db.create_all()
-        print(">>> [FONTAN] SUCCESS: База данных Supabase готова!")
+        print(">>> [FONTAN] SUCCESS: База данных Supabase подключена!")
     except Exception as e:
-        print(f">>> [FONTAN] DATABASE STARTUP WARNING: {e}")
+        print(f">>> [FONTAN] DB ERROR: {e}")
 
-# --- 5. ЕДИНАЯ ФУНКЦИЯ ТРЕКИНГА (БЕЗ ДУБЛЕЙ) ---
+# --- 5. ЕДИНЫЙ ТРЕКЕР ---
 @app.before_request
 def track_visitor():
-    # Игнорируем системные запросы Render
     if request.method == 'HEAD' or request.path == '/healthcheck':
         return
         
     try:
-        # 1. Общий счетчик (анонимные и все остальные)
         if not session.get('tracked_visitor'):
             stats = SiteStats.query.first()
             if stats:
@@ -255,16 +252,14 @@ def track_visitor():
                 except:
                     db.session.rollback()
 
-        # 2. Счетчик авторизованного юзера
-        if current_user.is_authenticated:
-            if not session.get('user_visit_counted'):
-                current_user.total_visits = (current_user.total_visits or 0) + 1
-                current_user.last_seen = db.func.now()
-                db.session.commit()
-                session['user_visit_counted'] = True
+        if current_user.is_authenticated and not session.get('user_visit_counted'):
+            current_user.total_visits = (current_user.total_visits or 0) + 1
+            current_user.last_seen = db.func.now()
+            db.session.commit()
+            session['user_visit_counted'] = True
     except Exception as e:
         db.session.rollback()
-        print(f">>> [FONTAN] Visitor tracking error: {e}")
+        print(f">>> [FONTAN] Статистика временно недоступна: {e}")
 # --- Р’РЎРџРћРњРћР“РђРўР•Р›Р¬РќР«Р• Р¤РЈРќРљР¦РР ---
 
 def send_verification_code(email):
