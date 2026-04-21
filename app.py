@@ -141,18 +141,20 @@ from flask import request, session
 PROJECT_ID = "apbtrkzzvnpogpttgbpg".strip()
 DB_USER = f"postgres.{PROJECT_ID}"
 DB_PASS = "fontan20261".strip()
-DB_IP = "18.198.145.223"
+
+# МЕНЯЕМ ЗДЕСЬ: Вместо IP используем домен Supabase
+DB_HOST = f"db.{PROJECT_ID}.supabase.co" 
 DB_NAME = "postgres"
 
-# Собираем URI вручную. Использование IPv4 адреса вместо домена гарантирует работу на Render.
-fixed_uri = f"postgresql://{DB_USER}:{DB_PASS}@{DB_IP}:5432/{DB_NAME}?sslmode=require"
+# МЕНЯЕМ ЗДЕСЬ: Порт 6543 вместо 5432 и DB_HOST вместо DB_IP
+fixed_uri = f"postgresql://{DB_USER}:{DB_PASS}@{DB_HOST}:6543/{DB_NAME}?sslmode=require"
 
 app.config['SQLALCHEMY_DATABASE_URI'] = fixed_uri
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-    "poolclass": NullPool,               # Нулевой пул обязателен для Transaction mode в Supabase
+    "poolclass": NullPool,
     "connect_args": {
-        "connect_timeout": 20,           # Максимальное время ожидания
+        "connect_timeout": 20,
         "application_name": "fontan_app"
     }
 }
