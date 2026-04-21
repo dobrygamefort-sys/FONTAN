@@ -187,12 +187,9 @@ from flask_login import LoginManager, current_user
 from flask_socketio import SocketIO
 from flask import session, request
 
-# --- 1. ПРИНУДИТЕЛЬНЫЙ SUPABASE (ФИКС IPv6 + ПРЯМОЙ IP) ---
-# Мы используем прямой IP (52.59.152.35) вместо домена, 
-# чтобы избежать ошибки "Network is unreachable" на Render.
-# Твоя точная ссылка на Supabase (Франкфурт)
-# Мы прописываем её напрямую, чтобы Render не подсунул старый Neon
-DB_URL = "postgresql://postgres.apbtrkzzvnpogpttgbpg:FontanAdmin2026@aws-0-eu-central-1.pooler.supabase.com:6543/postgres?prepare_threshold=0"
+# --- 1. ПРАВИЛЬНЫЙ URL (БЕЗ ПАРАМЕТРОВ В СТРОКЕ) ---
+# Мы убрали ?prepare_threshold из самой строки, чтобы не было ошибки DSN
+DB_URL = "postgresql://postgres.apbtrkzzvnpogpttgbpg:FontanAdmin2026@aws-0-eu-central-1.pooler.supabase.com:6543/postgres"
 
 app.config['SQLALCHEMY_DATABASE_URI'] = DB_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -200,7 +197,9 @@ app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     "poolclass": NullPool,
     "connect_args": {
         "sslmode": "require",
-        "connect_timeout": 30
+        "connect_timeout": 30,
+        # Передаем параметры сессии здесь, чтобы psycopg2 не выдавал ProgrammingError
+        "options": "-c prepare_threshold=0"
     }
 }
 
@@ -220,38 +219,38 @@ cloudinary.config(
 )
 
 # --- 4. БЕЗОПАСНЫЙ ЗАПУСК ---
-# Мы оборачиваем всё в try-except, чтобы приложение не падало при проверке схемы
 with app.app_context():
     try:
-        print(">>> [FONTAN] ПРОВЕРКА СВЯЗИ: aws-0-eu-central-1.pooler.supabase.com")
+        print(">>> [FONTAN] ПРОВЕРКА СВЯЗИ: aws-0-eu-central-1.pooler.supabase.com (PORT 6543)")
         db.session.execute(text('SELECT 1'))
         db.create_all()
-        print(">>> [FONTAN] SUCCESS: База данных подключена через пулер!")
+        print(">>> [FONTAN] SUCCESS: База данных Supabase подключена!")
     except Exception as e:
         print(f">>> [FONTAN] DATABASE STARTUP WARNING: {e}")
 
-# --- 5. ЕДИНЫЙ ТРЕКЕР (С ЗАЩИТОЙ ОТ ОШИБОК КОНТЕКСТА) ---
+# --- 5. ЕДИНЫЙ ТРЕКЕР (С ЗАЩИТОЙ) ---
 @app.before_request
 def track_visitor():
-    # Пропускаем системные запросы Render
     if request.method == 'HEAD' or request.path == '/healthcheck':
         return
         
     try:
-        # Проверяем сессию
         if not session.get('tracked_visitor'):
-            # Импортируем модель внутри, чтобы избежать проблем с цикличным импортом
-            from models import SiteStats 
+            # Импортируем модель здесь для безопасности
+            from app import SiteStats 
             stats = SiteStats.query.first()
             if stats:
                 stats.total_visitors = (stats.total_visitors or 0) + 1
                 db.session.commit()
                 session['tracked_visitor'] = True
             else:
-                new_stats = SiteStats(total_visitors=1)
-                db.session.add(new_stats)
-                db.session.commit()
-                session['tracked_visitor'] = True
+                try:
+                    new_stats = SiteStats(total_visitors=1)
+                    db.session.add(new_stats)
+                    db.session.commit()
+                    session['tracked_visitor'] = True
+                except:
+                    db.session.rollback()
 
         if current_user.is_authenticated and not session.get('user_visit_counted'):
             current_user.total_visits = (current_user.total_visits or 0) + 1
@@ -259,9 +258,9 @@ def track_visitor():
             db.session.commit()
             session['user_visit_counted'] = True
     except Exception as e:
-        if db.session:
+        if 'db' in locals() or 'db' in globals():
             db.session.rollback()
-        print(f">>> [FONTAN] Stat error (ignored): {e}")
+        print(f">>> [FONTAN] Stat error: {e}")
 # --- Р’РЎРџРћРњРћР“РђРўР•Р›Р¬РќР«Р• Р¤РЈРќРљР¦РР ---
 
 def send_verification_code(email):
