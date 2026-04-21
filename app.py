@@ -200,7 +200,7 @@ from flask import session
 # Используем порт 6543 и специальный логин для стабильной работы пулера
 DB_USER = "postgres.apbtrkzzvnpogpttgbpg" 
 DB_PASS = "FontanAdmin2026"
-DB_HOST = "aws-0-us-east-1.pooler.supabase.com"
+DB_HOST = "aws-0-eu-central-1.pooler.supabase.com"
 DB_PORT = "6543"
 DB_NAME = "postgres"
 
