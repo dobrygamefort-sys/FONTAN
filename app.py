@@ -169,7 +169,7 @@ cloudinary.config(
 # --- 4. БЕЗОПАСНЫЙ ЗАПУСК ---
 with app.app_context():
     try:
-        print(">>> [FONTAN] ПОДКЛЮЧЕНИЕ К SUPABASE POOLER (PORT 6543)...")
+        print(">>> [FONTAN] ПОДКЛЮЧЕНИЕ К SUPABASE POOLER")
         db.session.execute(text('SELECT 1'))
         db.session.commit()
         db.create_all()
