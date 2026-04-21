@@ -185,14 +185,13 @@ from sqlalchemy.pool import NullPool
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, current_user
 from flask_socketio import SocketIO
-from flask import session
+from flask import session, request
 
-# --- 1. ПРИНУДИТЕЛЬНЫЙ SUPABASE (ПРЯМОЙ ХОСТ - FRANKFURT) ---
-# Используем прямой хост (db.apbtrk...) и порт 5432. 
-# Это надежнее пулера (6543) и не требует спец. логинов.
-DB_URL = "postgresql://postgres.apbtrkzzvnpogpttgbpg:FontanAdmin2026@db.apbtrkzzvnpogpttgbpg.supabase.co:5432/postgres"
+# --- 1. ПРИНУДИТЕЛЬНЫЙ SUPABASE (ФИКС IPv6 + ПРЯМОЙ IP) ---
+# Мы используем прямой IP (52.59.152.35) вместо домена, 
+# чтобы избежать ошибки "Network is unreachable" на Render.
+DB_URL = "postgresql://postgres.apbtrkzzvnpogpttgbpg:FontanAdmin2026@52.59.152.35:5432/postgres"
 
-# ГАРАНТИЯ: Мы перезаписываем DATABASE_URL, чтобы Neon даже не пытался подключиться
 app.config['SQLALCHEMY_DATABASE_URI'] = DB_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
@@ -203,14 +202,14 @@ app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     }
 }
 
-# --- 2. ИНИЦИАЛИЗАЦИЯ ---
+# --- 2. ИНИЦИАЛИЗАЦИЯ РАСШИРЕНИЙ ---
 db.init_app(app)
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 socketio = SocketIO(app, async_mode='gevent', cors_allowed_origins="*")
 
-# --- 3. CLOUDINARY ---
+# --- 3. CLOUDINARY CONFIG ---
 cloudinary.config(
     cloud_name='daz4839e7', 
     api_key='371541773313745', 
@@ -218,56 +217,25 @@ cloudinary.config(
     secure=True
 )
 
-# --- 4. БЕЗОПАСНЫЙ СТАРТ (Убираем ошибки контекста) ---
+# --- 4. БЕЗОПАСНЫЙ СТАРТ (Внутри контекста) ---
 with app.app_context():
     try:
-        print(">>> [FONTAN] ПОДКЛЮЧЕНИЕ: db.apbtrkzzvnpogpttgbpg.supabase.co:5432")
+        print(">>> [FONTAN] ПОДКЛЮЧЕНИЕ ПО IP: 52.59.152.35 (FRANKFURT)")
         db.session.execute(text('SELECT 1'))
         db.create_all()
-        print(">>> [FONTAN] SUCCESS: База данных во Франкфурте подключена!")
+        print(">>> [FONTAN] SUCCESS: База данных Supabase готова!")
     except Exception as e:
-        print(f">>> [FONTAN] DB CRITICAL ERROR: {e}")
+        print(f">>> [FONTAN] DATABASE STARTUP WARNING: {e}")
 
-# --- 5. ФИКС track_visitor ---
+# --- 5. ЕДИНАЯ ФУНКЦИЯ ТРЕКИНГА (БЕЗ ДУБЛЕЙ) ---
 @app.before_request
 def track_visitor():
-    # Проверяем, не является ли запрос проверкой жизнеспособности (HEAD/Healthcheck)
-    from flask import request
-    if request.method == 'HEAD':
+    # Игнорируем системные запросы Render
+    if request.method == 'HEAD' or request.path == '/healthcheck':
         return
         
     try:
-        if not session.get('tracked_visitor'):
-            stats = SiteStats.query.first()
-            if stats:
-                stats.total_visitors = (stats.total_visitors or 0) + 1
-                db.session.commit()
-                session['tracked_visitor'] = True
-            else:
-                try:
-                    new_stats = SiteStats(total_visitors=1)
-                    db.session.add(new_stats)
-                    db.session.commit()
-                    session['tracked_visitor'] = True
-                except:
-                    db.session.rollback()
-
-        if current_user.is_authenticated:
-            if not session.get('user_visit_counted'):
-                current_user.total_visits = (current_user.total_visits or 0) + 1
-                current_user.last_seen = db.func.now()
-                db.session.commit()
-                session['user_visit_counted'] = True
-    except Exception as e:
-        db.session.rollback()
-        # Просто лог, чтобы сайт не падал
-        print(f">>> [FONTAN] Stat error: {e}")
-
-# --- 6. ОБНОВЛЕННЫЙ ТРЕКИНГ ПОСЕТИТЕЛЕЙ ---
-@app.before_request
-def track_visitor():
-    try:
-        # 1. Общий счетчик
+        # 1. Общий счетчик (анонимные и все остальные)
         if not session.get('tracked_visitor'):
             stats = SiteStats.query.first()
             if stats:
@@ -293,35 +261,6 @@ def track_visitor():
     except Exception as e:
         db.session.rollback()
         print(f">>> [FONTAN] Visitor tracking error: {e}")
-
-# --- 6. ФИКС ФУНКЦИИ track_visitor ---
-@app.before_request
-def track_visitor():
-    try:
-        if not session.get('tracked_visitor'):
-            stats = SiteStats.query.first()
-            if stats:
-                stats.total_visitors = (stats.total_visitors or 0) + 1
-                db.session.commit()
-                session['tracked_visitor'] = True
-            else:
-                try:
-                    new_stats = SiteStats(total_visitors=1)
-                    db.session.add(new_stats)
-                    db.session.commit()
-                    session['tracked_visitor'] = True
-                except:
-                    db.session.rollback()
-
-        if current_user.is_authenticated:
-            if not session.get('user_visit_counted'):
-                current_user.total_visits = (current_user.total_visits or 0) + 1
-                current_user.last_seen = db.func.now()
-                db.session.commit()
-                session['user_visit_counted'] = True
-    except Exception as e:
-        db.session.rollback()
-        print(f">>> [FONTAN] Visitor tracking paused: {e}")
 # --- Р’РЎРџРћРњРћР“РђРўР•Р›Р¬РќР«Р• Р¤РЈРќРљР¦РР ---
 
 def send_verification_code(email):
