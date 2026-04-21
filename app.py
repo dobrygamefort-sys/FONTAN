@@ -188,13 +188,26 @@ from flask import session
 
 # --- 1. ЖЕСТКАЯ НАСТРОЙКА URL (IPv4 FIX) ---
 # Мы используем адрес пулера, но на ПРЯМОМ порту 5432, чтобы обойти проблемы с IPv6
-DATABASE_URL = 'postgresql://postgres.apbtrkzzvnpogpttgbpg:FontanAdmin2026@aws-0-us-east-1.pooler.supabase.com:5432/postgres'
+import os
+import cloudinary
+from sqlalchemy.pool import NullPool
+from flask_sqlalchemy import SQLAlchemy
+from flask_login import LoginManager, current_user
+from flask_socketio import SocketIO
+from flask import session
 
-# Исправление протокола
-if DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+# --- 1. ПРИНУДИТЕЛЬНЫЙ КОНФИГ SUPABASE (Игнорируем переменные Render) ---
+# Используем порт 6543 и специальный логин для стабильной работы пулера
+DB_USER = "postgres.apbtrkzzvnpogpttgbpg" 
+DB_PASS = "FontanAdmin2026"
+DB_HOST = "aws-0-us-east-1.pooler.supabase.com"
+DB_PORT = "6543"
+DB_NAME = "postgres"
 
-# --- 2. КОНФИГУРАЦИЯ ---
+# Собираем URL с фиксом для SQLAlchemy (prepare_threshold=0 необходим для пулеров)
+DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}?prepare_threshold=0"
+
+# --- 2. КОНФИГУРАЦИЯ FLASK ---
 app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
@@ -205,14 +218,14 @@ app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     }
 }
 
-# --- 3. ИНИЦИАЛИЗАЦИЯ ---
+# --- 3. ИНИЦИАЛИЗАЦИЯ РАСШИРЕНИЙ ---
 db.init_app(app)
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 socketio = SocketIO(app, async_mode='gevent', cors_allowed_origins="*")
 
-# --- 4. CLOUDINARY ---
+# --- 4. CLOUDINARY CONFIG ---
 cloudinary.config(
     cloud_name = 'daz4839e7', 
     api_key = '371541773313745', 
@@ -220,17 +233,46 @@ cloudinary.config(
     secure = True
 )
 
-# --- 5. БЕЗОПАСНЫЙ ЗАПУСК ---
-# Комментируем принты вне контекста, чтобы не было ошибки "outside of application context"
+# --- 5. БЕЗОПАСНЫЙ ЗАПУСК (Внутри контекста) ---
 with app.app_context():
     try:
         from sqlalchemy import text
-        print(f">>> [FONTAN] ПОДКЛЮЧЕНИЕ К БАЗЕ...")
+        # Простая проверка связи
         db.session.execute(text('SELECT 1'))
         db.create_all()
-        print(">>> [FONTAN] SUCCESS: БАЗА ПОДКЛЮЧЕНА!")
+        print(">>> [FONTAN] SUCCESS: База данных Supabase подключена!")
     except Exception as e:
-        print(f">>> [FONTAN] DB WARNING: {e}")
+        # Если здесь ошибка, приложение не упадет при старте, а выдаст инфо в лог
+        print(f">>> [FONTAN] DATABASE STARTUP WARNING: {e}")
+
+# --- 6. ФИКС ФУНКЦИИ track_visitor ---
+@app.before_request
+def track_visitor():
+    try:
+        if not session.get('tracked_visitor'):
+            stats = SiteStats.query.first()
+            if stats:
+                stats.total_visitors = (stats.total_visitors or 0) + 1
+                db.session.commit()
+                session['tracked_visitor'] = True
+            else:
+                try:
+                    new_stats = SiteStats(total_visitors=1)
+                    db.session.add(new_stats)
+                    db.session.commit()
+                    session['tracked_visitor'] = True
+                except:
+                    db.session.rollback()
+
+        if current_user.is_authenticated:
+            if not session.get('user_visit_counted'):
+                current_user.total_visits = (current_user.total_visits or 0) + 1
+                current_user.last_seen = db.func.now()
+                db.session.commit()
+                session['user_visit_counted'] = True
+    except Exception as e:
+        db.session.rollback()
+        print(f">>> [FONTAN] Visitor tracking paused: {e}")
 # --- Р’РЎРџРћРњРћР“РђРўР•Р›Р¬РќР«Р• Р¤РЈРќРљР¦РР ---
 
 def send_verification_code(email):
