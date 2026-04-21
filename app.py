@@ -190,10 +190,14 @@ from flask import session, request
 # --- 1. ПРИНУДИТЕЛЬНЫЙ SUPABASE (ФИКС IPv6 + ПРЯМОЙ IP) ---
 # Мы используем прямой IP (52.59.152.35) вместо домена, 
 # чтобы избежать ошибки "Network is unreachable" на Render.
-DB_URL = "postgresql://postgres.apbtrkzzvnpogpttgbpg:FontanAdmin2026@52.59.152.35:5432/postgres"
+# Твоя точная ссылка на Supabase (Франкфурт)
+# Мы прописываем её напрямую, чтобы Render не подсунул старый Neon
+SUPABASE_URL = "postgresql://postgres.apbtrkzzvnpogpttgbpg:FontanAdmin2026@aws-0-eu-central-1.pooler.supabase.com:6543/postgres?prepare_threshold=0"
 
-app.config['SQLALCHEMY_DATABASE_URI'] = DB_URL
+app.config['SQLALCHEMY_DATABASE_URI'] = SUPABASE_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+# Важные настройки для пулера
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     "poolclass": NullPool,
     "connect_args": {
