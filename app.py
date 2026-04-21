@@ -130,7 +130,7 @@ WEBRTC_ICE_SERVERS = [
 # Найти свой URL: Supabase → Project Settings → Database → Transaction pooler
 import os
 from sqlalchemy import text
-from sqlalchemy.pool import QueuePool
+from sqlalchemy.pool import NullPool
 from flask_socketio import SocketIO
 from flask_login import LoginManager
 import cloudinary
@@ -138,25 +138,21 @@ import cloudinary
 # --- 1. ПОРТ ДЛЯ RENDER ---
 port = int(os.environ.get("PORT", 10000))
 
-# --- 2. КОНФИГУРАЦИЯ БАЗЫ (DIRECT MODE - БЕЗ ПУЛЕРА) ---
-# Прямое подключение — самое надежное, оно не выдает 'Tenant not found'
+# --- 2. КОНФИГУРАЦИЯ БАЗЫ (DIRECT CONNECTION FIX) ---
+# Мы меняем хост на прямой адрес базы и используем стандартный порт 5432
 PROJECT_ID = "apbtrkzzvnpogpttgbpg"
+DB_USER = "postgres" 
 DB_PASS = "fontan20261"
-DB_USER = "postgres"
-# Прямой хост базы данных Supabase
-DB_HOST = f"db.{PROJECT_ID}.supabase.co"
+DB_HOST = f"db.{PROJECT_ID}.supabase.co" # Прямой хост базы
 DB_NAME = "postgres"
 
-# Чистый URI без лишних наворотов, порт 5432 (Direct)
+# Прямое подключение через 5432 порт (не через пулер!)
 fixed_uri = f"postgresql://{DB_USER}:{DB_PASS}@{DB_HOST}:5432/{DB_NAME}?sslmode=require"
 
 app.config['SQLALCHEMY_DATABASE_URI'] = fixed_uri
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-    "pool_size": 10,
-    "max_overflow": 20,
-    "pool_timeout": 30,
-    "pool_recycle": 1800,
+    "poolclass": NullPool,
     "connect_args": {
         "connect_timeout": 30,
         "application_name": "fontan_app"
@@ -182,15 +178,14 @@ cloudinary.config(
 # --- 5. ПРОВЕРКА ПРИ СТАРТЕ ---
 with app.app_context():
     try:
-        print(f">>> [FONTAN] ПРЯМОЕ ПОДКЛЮЧЕНИЕ К: {DB_HOST}")
+        print(f">>> [FONTAN] ПРЯМОЕ ПОДКЛЮЧЕНИЕ К БАЗЕ: {DB_HOST}")
         db.session.execute(text('SELECT 1'))
         db.session.commit()
-        print(">>> [FONTAN] SUCCESS: Прямая связь с базой установлена!")
+        print(">>> [FONTAN] SUCCESS: Прямая связь установлена!")
         db.create_all()
     except Exception as e:
         if 'db' in globals(): db.session.rollback()
         print(f">>> [FONTAN] ОШИБКА: {str(e)}")
-        print(">>> СОВЕТ: Если пишет 'Connection refused', проверь пароль в Supabase Settings -> Database!")
 # --- ЗАПУСК (В САМОМ КОНЦЕ ФАЙЛА) ---
 # if __name__ == '__main__':
 #     socketio.run(app, host='0.0.0.0', port=port)
