@@ -140,14 +140,22 @@ from flask import request, session
 # Данные вшиты напрямую, чтобы исключить влияние старых DATABASE_URL в панели Render
 # --- ФИНАЛЬНЫЙ ГИБРИДНЫЙ ВАРЬЯНТ ---
 # --- РАБОЧИЙ ГИБРИД (ДЛЯ РЕГИОНА EU-CENTRAL-1) ---
+import os
+from sqlalchemy import text
+from sqlalchemy.pool import NullPool
+from flask_socketio import SocketIO
+from flask_login import LoginManager
+import cloudinary
+
+# --- 1. КОНФИГУРАЦИЯ БАЗЫ ДАННЫХ ---
 PROJECT_ID = "apbtrkzzvnpogpttgbpg"
 DB_USER = f"postgres.{PROJECT_ID}"
 DB_PASS = "fontan20261"
-# Официальный адрес пулера для твоего инстанса
+# Официальный адрес пулера для региона EU (Frankfurt)
 DB_HOST = "aws-0-eu-central-1.pooler.supabase.com" 
 DB_NAME = "postgres"
 
-# Собираем строку для порта 6543
+# Собираем строку для порта 6543 (Transaction Mode)
 fixed_uri = f"postgresql://{DB_USER}:{DB_PASS}@{DB_HOST}:6543/{DB_NAME}?sslmode=require"
 
 app.config['SQLALCHEMY_DATABASE_URI'] = fixed_uri
@@ -156,7 +164,8 @@ app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     "poolclass": NullPool,
     "connect_args": {
         "connect_timeout": 30,
-        "application_name": "fontan_app"
+        "application_name": "fontan_app",
+        "sslmode": "require"
     }
 }
 
@@ -165,7 +174,8 @@ db.init_app(app)
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
-# SocketIO с поддержкой gevent (важно для продакшена на Render)
+
+# SocketIO с поддержкой gevent
 socketio = SocketIO(app, async_mode='gevent', cors_allowed_origins="*")
 
 # --- 3. CLOUDINARY ---
@@ -176,13 +186,13 @@ cloudinary.config(
     secure=True
 )
 
-# --- 4. ПРОВЕРКА ПРИ СТАРТЕ (ЛОГИРОВАНИЕ В КОНСОЛЬ RENDER) ---
+# --- 4. ПРОВЕРКА ПРИ СТАРТЕ ---
 with app.app_context():
     try:
-        # Пароль в лог не выводим для безопасности
-        print(f">>> [FONTAN] ЗАПУСК ПРОВЕРКИ: Юзер [{DB_USER}] -> Хост [{DB_IP}]")
+        # Теперь выводим DB_HOST вместо DB_IP, чтобы не было ошибки "not defined"
+        print(f">>> [FONTAN] ЗАПУСК ПРОВЕРКИ: Юзер [{DB_USER}] -> Хост [{DB_HOST}]")
         
-        # Прямой запрос к базе для проверки прав доступа
+        # Прямой запрос к базе
         db.session.execute(text('SELECT 1'))
         db.session.commit()
         print(">>> [FONTAN] SUCCESS: База данных ответила успешно!")
@@ -191,21 +201,19 @@ with app.app_context():
         db.create_all()
         print(">>> [FONTAN] SUCCESS: Все таблицы базы данных готовы к работе!")
     except Exception as e:
-        if 'db' in globals(): db.session.rollback()
-        # Выводим полную ошибку, чтобы понять, если Supabase опять вернет Tenant not found
+        db.session.rollback()
         error_msg = str(e)
         print(f">>> [FONTAN] КРИТИЧЕСКАЯ ОШИБКА: {error_msg}")
         if "Tenant or user not found" in error_msg:
-            print(">>> [СОВЕТ] Проверь PROJECT_ID в коде. Supabase не видит этот проект.")
+            print(">>> [СОВЕТ] Проверь PROJECT_ID. Если он верен, попробуй сбросить пароль в Supabase.")
 
-# --- 5. ТРЕКЕР ПОСЕТИТЕЛЕЙ (ОПТИМИЗИРОВАННЫЙ) ---
+# --- 5. ТРЕКЕР ПОСЕТИТЕЛЕЙ ---
 @app.before_request
 def track_visitor():
     if request.method == 'HEAD' or request.path.startswith(('/healthcheck', '/static', '/favicon.ico')):
         return
     try:
         if not session.get('tracked_visitor'):
-            # Запрашиваем первую запись статистики
             stats = db.session.query(SiteStats).first()
             if not stats:
                 stats = SiteStats(total_visitors=1)
@@ -216,9 +224,9 @@ def track_visitor():
             db.session.commit()
             session['tracked_visitor'] = True
     except Exception as e:
-        if 'db' in globals(): db.session.rollback()
-        # Ошибка в трекере не должна мешать пользователю войти на сайт
-        pass
+        db.session.rollback()
+        # Ошибка в трекере не блокирует работу сайта
+        print(f">>> [APP LOG] track_visitor error: {str(e)}")
 # --- Р’РЎРџРћРњРћР“РђРўР•Р›Р¬РќР«Р• Р¤РЈРќРљР¦РР ---
 
 def send_verification_code(email):
