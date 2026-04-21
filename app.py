@@ -187,19 +187,21 @@ from flask_login import LoginManager, current_user
 from flask_socketio import SocketIO
 from flask import session, request
 
-# --- 1. ПРАВИЛЬНЫЙ URL (БЕЗ ПАРАМЕТРОВ В СТРОКЕ) ---
-# Мы убрали ?prepare_threshold из самой строки, чтобы не было ошибки DSN
-DB_URL = "postgresql://postgres.apbtrkzzvnpogpttgbpg:FontanAdmin2026@aws-0-eu-central-1.pooler.supabase.com:6543/postgres"
-
-app.config['SQLALCHEMY_DATABASE_URI'] = DB_URL
+# --- 1. ПРЯМАЯ НАСТРОЙКА ПАРАМЕТРОВ (БЕЗ ОШИБОК ПАРСИНГА) ---
+# Мы не используем DATABASE_URL, чтобы избежать путаницы с Neon
+app.config['SQLALCHEMY_DATABASE_URI'] = "postgresql://postgres.apbtrkzzvnpogpttgbpg:FontanAdmin2026@aws-0-eu-central-1.pooler.supabase.com:6543/postgres"
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     "poolclass": NullPool,
     "connect_args": {
+        "user": "postgres.apbtrkzzvnpogpttgbpg", # Полное имя для пулера
+        "password": "FontanAdmin2026",
+        "host": "aws-0-eu-central-1.pooler.supabase.com",
+        "port": 6543,
+        "database": "postgres",
         "sslmode": "require",
-        "connect_timeout": 30,
-        # Передаем параметры сессии здесь, чтобы psycopg2 не выдавал ProgrammingError
-        "options": "-c prepare_threshold=0"
+        "options": "-c prepare_threshold=0" # Отключаем заготовленные выражения для пулера
     }
 }
 
@@ -218,27 +220,29 @@ cloudinary.config(
     secure=True
 )
 
-# --- 4. БЕЗОПАСНЫЙ ЗАПУСК ---
+# --- 4. БЕЗОПАСНЫЙ ЗАПУСК КОНТЕКСТА ---
 with app.app_context():
     try:
-        print(">>> [FONTAN] ПРОВЕРКА СВЯЗИ: aws-0-eu-central-1.pooler.supabase.com (PORT 6543)")
+        print(">>> [FONTAN] ЗАПУСК СИСТЕМЫ: ПОДКЛЮЧЕНИЕ К SUPABASE...")
+        # Тестовый запрос
         db.session.execute(text('SELECT 1'))
         db.create_all()
-        print(">>> [FONTAN] SUCCESS: База данных Supabase подключена!")
+        print(">>> [FONTAN] SUCCESS: СВЯЗЬ УСТАНОВЛЕНА!")
     except Exception as e:
-        print(f">>> [FONTAN] DATABASE STARTUP WARNING: {e}")
+        print(f">>> [FONTAN] DATABASE ERROR: {e}")
 
-# --- 5. ЕДИНЫЙ ТРЕКЕР (С ЗАЩИТОЙ) ---
+# --- 5. ТРЕКЕР ПОСЕТИТЕЛЕЙ (ФИКС КОНТЕКСТА) ---
 @app.before_request
 def track_visitor():
+    # Не трогаем базу при системных запросах Render
     if request.method == 'HEAD' or request.path == '/healthcheck':
         return
         
     try:
         if not session.get('tracked_visitor'):
-            # Импортируем модель здесь для безопасности
+            # Проверяем наличие таблицы и данных
             from app import SiteStats 
-            stats = SiteStats.query.first()
+            stats = db.session.query(SiteStats).first()
             if stats:
                 stats.total_visitors = (stats.total_visitors or 0) + 1
                 db.session.commit()
@@ -251,16 +255,10 @@ def track_visitor():
                     session['tracked_visitor'] = True
                 except:
                     db.session.rollback()
-
-        if current_user.is_authenticated and not session.get('user_visit_counted'):
-            current_user.total_visits = (current_user.total_visits or 0) + 1
-            current_user.last_seen = db.func.now()
-            db.session.commit()
-            session['user_visit_counted'] = True
     except Exception as e:
-        if 'db' in locals() or 'db' in globals():
+        if 'db' in globals():
             db.session.rollback()
-        print(f">>> [FONTAN] Stat error: {e}")
+        print(f">>> [FONTAN] Stat log skipped: {e}")
 # --- Р’РЎРџРћРњРћР“РђРўР•Р›Р¬РќР«Р• Р¤РЈРќРљР¦РР ---
 
 def send_verification_code(email):
