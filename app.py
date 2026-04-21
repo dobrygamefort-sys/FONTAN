@@ -135,66 +135,36 @@ from sqlalchemy.pool import NullPool
 from flask_login import LoginManager
 from flask_socketio import SocketIO
 import cloudinary
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urlparse
 
-# --- 1. ФУНКЦИЯ ЖЕСТКОГО ИСПРАВЛЕНИЯ КОННЕКТА ---
-def get_fixed_db_uri(uri):
-    """
-    1. Переводит буквы в цифры (IPv4), чтобы обойти "Network is unreachable".
-    2. Добавляет ID проекта в логин, чтобы обойти "Tenant not found".
-    """
-    try:
-        project_id = "apbtrkzzvnpogpttgbpg"
-        p = urlparse(uri)
-        
-        # Резолвим IP. Если падает — используем проверенный IP пулера
-        try:
-            target_host = p.hostname or "aws-0-eu-central-1.pooler.supabase.com"
-            ipv4 = socket.gethostbyname(target_host)
-        except:
-            ipv4 = "18.198.145.223" # Прямой IPv4 адрес Франкфуртского пулера
-        
-        # Формируем логин: postgres.[PROJECT_ID]
-        username = p.username or "postgres"
-        if "." not in username:
-            username = f"postgres.{project_id}"
-            
-        # Собираем всё на порт 5432 (он стабильнее на Render)
-        # Убираем параметры из URL, если они мешают, оставляем только sslmode
-        new_netloc = f"{username}:{p.password}@{ipv4}:5432"
-        return urlunparse(p._replace(netloc=new_netloc, query="sslmode=require"))
-    except Exception as e:
-        print(f">>> [FONTAN] Ошибка обработки URI: {e}")
-        return uri
+# --- 1. ЖЕСТКАЯ КОНФИГУРАЦИЯ (БЕЗ ГАДАНИЙ) ---
+PROJECT_ID = "apbtrkzzvnpogpttgbpg"
+DB_USER = f"postgres.{PROJECT_ID}"  # КРИТИЧЕСКИ ВАЖНО: имя.проект
+DB_PASS = "fontan20261"
+DB_IP = "18.198.145.223"           # Прямой IPv4 пулера
+DB_NAME = "postgres"
 
-# --- 2. НАСТРОЙКА БАЗЫ ДАННЫХ ---
-# Пытаемся взять URL из настроек Render, если там пусто — берем дефолт
-raw_url = os.environ.get('DATABASE_URL') or (
-    "postgresql://postgres:fontan20261@aws-0-eu-central-1.pooler.supabase.com:5432/postgres?sslmode=require"
-)
+# Собираем URI вручную, игнорируя кривые переменные окружения
+fixed_uri = f"postgresql://{DB_USER}:{DB_PASS}@{DB_IP}:5432/{DB_NAME}?sslmode=require"
 
-# Прогоняем через фикс
-db_url = get_fixed_db_uri(raw_url)
-
-# Исправляем протокол для SQLAlchemy
-if db_url.startswith("postgres://"):
-    db_url = db_url.replace("postgres://", "postgresql://", 1)
-
-app.config['SQLALCHEMY_DATABASE_URI'] = db_url
+app.config['SQLALCHEMY_DATABASE_URI'] = fixed_uri
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-    "poolclass": NullPool,
-    "connect_args": {"connect_timeout": 10}
+    "poolclass": NullPool,               # Для пулера Supabase лучше не держать свои пулы
+    "connect_args": {
+        "connect_timeout": 10,
+        "application_name": "fontan_app"
+    }
 }
 
-# --- 3. ИНИЦИАЛИЗАЦИЯ ---
+# --- 2. ИНИЦИАЛИЗАЦИЯ ---
 db.init_app(app)
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 socketio = SocketIO(app, async_mode='gevent', cors_allowed_origins="*")
 
-# --- 4. CLOUDINARY ---
+# --- 3. CLOUDINARY ---
 cloudinary.config(
     cloud_name='daz4839e7', 
     api_key='371541773313745', 
@@ -202,47 +172,41 @@ cloudinary.config(
     secure=True
 )
 
-# --- 5. БЕЗОПАСНЫЙ ЗАПУСК ---
+# --- 4. ПРОВЕРКА ПРИ СТАРТЕ (С РАСШИРЕННЫМ ЛОГОМ) ---
 with app.app_context():
     try:
-        # Инфо для логов (без пароля)
-        safe_log_url = app.config['SQLALCHEMY_DATABASE_URI'].split('@')[-1]
-        print(f">>> [FONTAN] ПОДКЛЮЧЕНИЕ К: {safe_log_url}")
-        
+        print(f">>> [FONTAN] ПОПЫТКА СВЯЗИ: Пользователь {DB_USER} на IP {DB_IP}")
+        # Простая проверка связи
         db.session.execute(text('SELECT 1'))
-        db.session.commit()
+        print(">>> [FONTAN] SUCCESS: ТЕСТОВЫЙ ЗАПРОС ПРОШЕЛ!")
+        
         db.create_all()
-        print(">>> [FONTAN] SUCCESS: БАЗА ДАННЫХ ПОДКЛЮЧЕНА!")
+        print(">>> [FONTAN] SUCCESS: ТАБЛИЦЫ ПРОВЕРЕНЫ/СОЗДАНЫ!")
     except Exception as e:
         if 'db' in globals(): db.session.rollback()
-        print(f">>> [FONTAN] DB STARTUP ERROR: {e}")
-        print(">>> [FONTAN] ВНИМАНИЕ: Приложение работает БЕЗ базы данных.")
+        print(f">>> [FONTAN] ОШИБКА БАЗЫ: {str(e)}")
+        print(">>> [FONTAN] ПРИМЕЧАНИЕ: Если видишь 'Tenant not found', значит Supabase не принял логин с точкой.")
 
-# --- 6. ТРЕКЕР ПОСЕТИТЕЛЕЙ ---
+# --- 5. ТРЕКЕР ПОСЕТИТЕЛЕЙ ---
 @app.before_request
 def track_visitor():
-    if request.method == 'HEAD' or request.path == '/healthcheck' or request.path.startswith('/static'):
+    if request.method == 'HEAD' or request.path.startswith(('/healthcheck', '/static')):
         return
     try:
-        # Проверяем наличие таблицы перед запросом, чтобы не спамить ошибками
         if not session.get('tracked_visitor'):
+            # Используем session.get внутри запроса для безопасности
             stats = db.session.query(SiteStats).first()
-            if stats:
-                stats.total_visitors = (stats.total_visitors or 0) + 1
-                db.session.commit()
-                session['tracked_visitor'] = True
-            else:
-                new_stats = SiteStats(total_visitors=1)
-                db.session.add(new_stats)
-                db.session.commit()
-                session['tracked_visitor'] = True
+            if not stats:
+                stats = SiteStats(total_visitors=0)
+                db.session.add(stats)
+            
+            stats.total_visitors += 1
+            db.session.commit()
+            session['tracked_visitor'] = True
     except Exception as e:
         if 'db' in globals(): db.session.rollback()
-        # Выводим только критику
-        if "connection" in str(e).lower():
-            pass # Не спамим при отсутствии связи
-        else:
-            print(f">>> [FONTAN] Visitor tracking paused: {e}")
+        # Тихая ошибка для трекера, чтобы не валить сайт
+        pass
 # --- Р’РЎРџРћРњРћР“РђРўР•Р›Р¬РќР«Р• Р¤РЈРќРљР¦РР ---
 
 def send_verification_code(email):
