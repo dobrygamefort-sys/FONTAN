@@ -133,19 +133,13 @@ from sqlalchemy.pool import NullPool
 
 # --- 1. НАСТРОЙКА БАЗЫ ДАННЫХ ---
 # Приоритет: env var DATABASE_URL (Render) > Supabase fallback
-_db_url = os.environ.get('DATABASE_URL', '')
-if _db_url:
-    # Render иногда даёт устаревший postgres:// — фиксим
-    if _db_url.startswith('postgres://'):
-        _db_url = _db_url.replace('postgres://', 'postgresql://', 1)
-    app.config['SQLALCHEMY_DATABASE_URI'] = _db_url
-else:
-    # Supabase прямое подключение (работает на Render)
-    app.config['SQLALCHEMY_DATABASE_URI'] = (
-        "postgresql+psycopg2://postgres:fontan20261"
-        "@db.apbtrkzzvnpogpttgbpg.supabase.co:5432/postgres?sslmode=require"
-    )
-
+# Supabase Transaction Pooler — IPv4, порт 6543, работает на Render free tier
+# username ОБЯЗАТЕЛЬНО = postgres.PROJECT_REF (не просто postgres!)
+SUPABASE_URL = (
+    "postgresql+psycopg2://postgres.apbtrkzzvnpogpttgbpg:fontan20261"
+    "@aws-0-eu-central-1.pooler.supabase.com:6543/postgres?sslmode=require"
+)
+app.config['SQLALCHEMY_DATABASE_URI'] = SUPABASE_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {"poolclass": NullPool}
 
@@ -167,12 +161,14 @@ cloudinary.config(
 # --- 4. БЕЗОПАСНЫЙ ЗАПУСК ---
 with app.app_context():
     try:
-        print(">>> [FONTAN] ПОДКЛЮЧЕНИЕ ЧЕРЕЗ CONNECT_ARGS (PORT 6543)...")
+        print(">>> [FONTAN] ПОДКЛЮЧЕНИЕ К SUPABASE POOLER (PORT 6543)...")
         db.session.execute(text('SELECT 1'))
+        db.session.commit()
         db.create_all()
         print(">>> [FONTAN] SUCCESS: SUPABASE ПОДКЛЮЧЕН!")
     except Exception as e:
         print(f">>> [FONTAN] DB STARTUP ERROR: {e}")
+        print(">>> [FONTAN] Приложение продолжает работу без DB...")
 
 # --- 5. ТРЕКЕР ПОСЕТИТЕЛЕЙ (ФИКС КОНТЕКСТА) ---
 @app.before_request
@@ -9873,8 +9869,10 @@ def on_call_signal(data):
 # --- РЎРћР—Р”РђРќРР• РўРђР‘Р›РР¦ Р РђР”РњРРќРђ ---
 
 with app.app_context():
-
-    db.create_all()
+    try:
+        db.create_all()
+    except Exception as e:
+        print(f">>> [FONTAN] create_all skipped: {e}")
 
     try:
         ensure_user_sessions_schema()
