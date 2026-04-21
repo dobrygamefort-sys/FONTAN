@@ -139,15 +139,16 @@ from flask import request, session
 # --- 1. АБСОЛЮТНО ЖЕСТКАЯ КОНФИГУРАЦИЯ (ИГНОРИРУЕМ ВСЕ ПЕРЕМЕННЫЕ RENDER) ---
 # Данные вшиты напрямую, чтобы исключить влияние старых DATABASE_URL в панели Render
 # --- ФИНАЛЬНЫЙ ГИБРИДНЫЙ ВАРЬЯНТ ---
+# --- РАБОЧИЙ ГИБРИД (ДЛЯ РЕГИОНА EU-CENTRAL-1) ---
 PROJECT_ID = "apbtrkzzvnpogpttgbpg"
 DB_USER = f"postgres.{PROJECT_ID}"
 DB_PASS = "fontan20261"
-DB_IP = "18.198.145.223"  # Тот самый IPv4, который Render точно видит
+# Официальный адрес пулера для твоего инстанса
+DB_HOST = "aws-0-eu-central-1.pooler.supabase.com" 
 DB_NAME = "postgres"
 
-# Соединяем: IPv4 адрес + ПОРТ 6543 (пулер)
-# Это обходит и "Tenant not found", и "Network unreachable"
-fixed_uri = f"postgresql://{DB_USER}:{DB_PASS}@{DB_IP}:6543/{DB_NAME}?sslmode=require"
+# Собираем строку для порта 6543
+fixed_uri = f"postgresql://{DB_USER}:{DB_PASS}@{DB_HOST}:6543/{DB_NAME}?sslmode=require"
 
 app.config['SQLALCHEMY_DATABASE_URI'] = fixed_uri
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
