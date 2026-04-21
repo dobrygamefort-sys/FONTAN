@@ -139,27 +139,25 @@ import cloudinary
 # --- 1. ПОРТ ДЛЯ RENDER ---
 port = int(os.environ.get("PORT", 10000))
 
-# --- 2. КОНФИГУРАЦИЯ БАЗЫ (TOTAL FIX) ---
+# --- 2. КОНФИГУРАЦИЯ БАЗЫ (CLEAN FIX) ---
 PROJECT_ID = "apbtrkzzvnpogpttgbpg"
 DB_PASS = "fontan20261"
-# Кодируем пароль на случай скрытых символов
+# Кодируем только пароль, чтобы спецсимволы не ломали URI
 encoded_pass = urllib.parse.quote_plus(DB_PASS)
 DB_USER = f"postgres.{PROJECT_ID}" 
 DB_HOST = "aws-0-eu-central-1.pooler.supabase.com" 
 DB_NAME = "postgres"
 
-# КРИТИЧЕСКИЕ ПАРАМЕТРЫ ДЛЯ ПУЛЕРА:
-# 1. prepared_statements=false — ОБЯЗАТЕЛЬНО для режима Transaction (6543)
-# 2. options=project%3D... — Прямое указание ID проекта
+# Убрали prepared_statements, оставили только самое важное
 fixed_uri = (
     f"postgresql://{DB_USER}:{encoded_pass}@{DB_HOST}:6543/{DB_NAME}"
-    f"?sslmode=require&prepared_statements=false&options=project%3D{PROJECT_ID}"
+    f"?sslmode=require&options=project%3D{PROJECT_ID}"
 )
 
 app.config['SQLALCHEMY_DATABASE_URI'] = fixed_uri
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-    "poolclass": NullPool,  # Отключаем пул Flask, чтобы не забивать лимиты пулера
+    "poolclass": NullPool,
     "connect_args": {
         "connect_timeout": 30,
         "application_name": "fontan_app"
@@ -185,16 +183,14 @@ cloudinary.config(
 # --- 5. ПРОВЕРКА ПРИ СТАРТЕ ---
 with app.app_context():
     try:
-        print(f">>> [FONTAN] ПОДКЛЮЧЕНИЕ К ПРОЕКТУ: {PROJECT_ID}")
-        # Проверка связи через низкоуровневый SQL
+        print(f">>> [FONTAN] ПОДКЛЮЧЕНИЕ ЧЕРЕЗ ПУЛЕР (6543): {PROJECT_ID}")
         db.session.execute(text('SELECT 1'))
         db.session.commit()
-        print(">>> [FONTAN] ПОБЕДА: База данных подключена!")
+        print(">>> [FONTAN] SUCCESS: База данных (Пулер) отвечает!")
         db.create_all()
     except Exception as e:
         if 'db' in globals(): db.session.rollback()
-        print(f">>> [FONTAN] ОШИБКА АВТОРИЗАЦИИ: {str(e)}")
-        print(">>> СОВЕТ: Если ошибка 'Tenant not found' осталась — проверь пароль в панели Supabase!")
+        print(f">>> [FONTAN] ОШИБКА БАЗЫ: {str(e)}")
 
 # --- ЗАПУСК (В САМОМ КОНЦЕ ФАЙЛА) ---
 # if __name__ == '__main__':
