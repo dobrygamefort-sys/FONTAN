@@ -9997,41 +9997,31 @@ with app.app_context():
     # ---------------------------------------------------
 
     # Создание админа
-
-    admin = User.query.filter_by(username='admin').first()
-
-    if not admin:
-
-        print("Создаю админа...")
-
-        admin = User(
-
-            username='admin',
-
-            email='admin@fontan.local',
-
-            password=generate_password_hash('12we1qtr11'),
-
-            is_admin=True,
-
-            is_verified=True,
-
-            bio="Главный Администратор",
-
-            theme='dark'
-
-        )
-
-        db.session.add(admin)
-
-        db.session.commit()
-
-        print("Админ создан: admin / 12we1qtr11")
-
-if __name__ == '__main__':
-
-    # Для Render важно использовать host='0.0.0.0' и порт из окружения
-
-    port = int(os.environ.get("PORT", 5000))
-
-    socketio.run(app, host='0.0.0.0', port=port, debug=False)
+with app.app_context():
+    try:  # Этот блок должен быть внутри with (сдвинут на 4 пробела)
+        # Проверяем наличие таблиц и админа
+        db.create_all() 
+        
+        admin = User.query.filter_by(username='admin').first()
+        if not admin:
+            print(">>> [FONTAN] Создаю админа...")
+            admin = User(
+                username='admin',
+                email='admin@fontan.local',
+                password=generate_password_hash('12we1qtr11'),
+                is_admin=True,
+                is_verified=True,
+                bio="Главный Администратор",
+                theme='dark'
+            )
+            db.session.add(admin)
+            db.session.commit()
+            print(">>> [FONTAN] Админ создан успешно!")
+    except Exception as e:
+        # Сдвинуто на один уровень с try
+        print(f">>> [FONTAN] Критическая ошибка базы при старте: {e}")
+        # Используйте проверку, чтобы rollback не упал, если db не инициализирована
+        try:
+            db.session.rollback()
+        except:
+            pass
