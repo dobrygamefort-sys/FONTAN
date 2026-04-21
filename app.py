@@ -138,9 +138,9 @@ if _db_url:
     # Render иногда даёт устаревший postgres:// — фиксим
     if _db_url.startswith('postgres://'):
         _db_url = _db_url.replace('postgres://', 'postgresql://', 1)
-    app.config['SQLALCHEMY_DATABASE_URI'] = _db_url
-    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {"poolclass": NullPool}
-else:
+    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    "poolclass": NullPool,
+}
     # Supabase Transaction Pooler (IPv4, работает на Render free tier)
     _sb_user = quote_plus("postgres.apbtrkzzvnpogpttgbpg")
     _sb_pass = quote_plus("FontanAdmin2026")
