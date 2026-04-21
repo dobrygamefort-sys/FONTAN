@@ -142,44 +142,6 @@ import cloudinary
 
 import os
 import cloudinary
-from sqlalchemy.pool import NullPool
-from flask_sqlalchemy import SQLAlchemy
-from flask_login import LoginManager
-from flask_socketio import SocketIO
-
-# --- 1. НАСТРОЙКА БАЗЫ ДАННЫХ ---
-# Прямой URL (порт 5432) — самый надежный путь без пулера
-import os
-import cloudinary
-from sqlalchemy.pool import NullPool
-from flask_sqlalchemy import SQLAlchemy
-from flask_login import LoginManager
-from flask_socketio import SocketIO
-
-# --- 1. НАСТРОЙКА БАЗЫ ДАННЫХ (БЕЗ NEON) ---
-# Прямой URL Supabase (порт 5432) — самый стабильный
-import os
-import cloudinary
-from sqlalchemy.pool import NullPool
-from flask_sqlalchemy import SQLAlchemy
-from flask_login import LoginManager, current_user
-from flask_socketio import SocketIO
-from flask import session
-
-# 1. СТРОГИЙ URL (IPv4 совместимый)
-import os
-import cloudinary
-from sqlalchemy.pool import NullPool
-from flask_sqlalchemy import SQLAlchemy
-from flask_login import LoginManager, current_user
-from flask_socketio import SocketIO
-from flask import session
-
-# --- 1. ЖЕСТКАЯ НАСТРОЙКА URL (ПРЯМОЕ ПОДКЛЮЧЕНИЕ) ---
-# ВАЖНО: Используем прямой хост проекта db.apbtrk... и стандартный порт 5432
-# Это обходит капризные пулеры и ошибки "Tenant not found"
-import os
-import cloudinary
 from sqlalchemy import text
 from sqlalchemy.pool import NullPool
 from flask_sqlalchemy import SQLAlchemy
@@ -187,21 +149,22 @@ from flask_login import LoginManager, current_user
 from flask_socketio import SocketIO
 from flask import session, request
 
-# --- 1. ПРЯМАЯ НАСТРОЙКА ПАРАМЕТРОВ (БЕЗ ОШИБОК ПАРСИНГА) ---
-# Мы не используем DATABASE_URL, чтобы избежать путаницы с Neon
-app.config['SQLALCHEMY_DATABASE_URI'] = "postgresql://postgres.apbtrkzzvnpogpttgbpg:FontanAdmin2026@aws-0-eu-central-1.pooler.supabase.com:6543/postgres"
+# --- 1. ФИНАЛЬНАЯ НАСТРОЙКА (БЕЗ ДУБЛИРОВАНИЯ АРГУМЕНТОВ) ---
+# Оставляем пустой префикс, чтобы избежать ошибки "database and dbname"
+app.config['SQLALCHEMY_DATABASE_URI'] = "postgresql://" 
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     "poolclass": NullPool,
     "connect_args": {
-        "user": "postgres.apbtrkzzvnpogpttgbpg", # Полное имя для пулера
+        "user": "postgres.apbtrkzzvnpogpttgbpg",
         "password": "FontanAdmin2026",
         "host": "aws-0-eu-central-1.pooler.supabase.com",
         "port": 6543,
         "database": "postgres",
         "sslmode": "require",
-        "options": "-c prepare_threshold=0" # Отключаем заготовленные выражения для пулера
+        # options передаем строкой, это важно для psycopg2
+        "options": "-c prepare_threshold=0"
     }
 }
 
@@ -220,27 +183,25 @@ cloudinary.config(
     secure=True
 )
 
-# --- 4. БЕЗОПАСНЫЙ ЗАПУСК КОНТЕКСТА ---
+# --- 4. БЕЗОПАСНЫЙ ЗАПУСК ---
 with app.app_context():
     try:
-        print(">>> [FONTAN] ЗАПУСК СИСТЕМЫ: ПОДКЛЮЧЕНИЕ К SUPABASE...")
-        # Тестовый запрос
+        print(">>> [FONTAN] ПОДКЛЮЧЕНИЕ ЧЕРЕЗ CONNECT_ARGS (PORT 6543)...")
         db.session.execute(text('SELECT 1'))
         db.create_all()
-        print(">>> [FONTAN] SUCCESS: СВЯЗЬ УСТАНОВЛЕНА!")
+        print(">>> [FONTAN] SUCCESS: SUPABASE ПОДКЛЮЧЕН!")
     except Exception as e:
-        print(f">>> [FONTAN] DATABASE ERROR: {e}")
+        print(f">>> [FONTAN] DB STARTUP ERROR: {e}")
 
 # --- 5. ТРЕКЕР ПОСЕТИТЕЛЕЙ (ФИКС КОНТЕКСТА) ---
 @app.before_request
 def track_visitor():
-    # Не трогаем базу при системных запросах Render
     if request.method == 'HEAD' or request.path == '/healthcheck':
         return
         
     try:
         if not session.get('tracked_visitor'):
-            # Проверяем наличие таблицы и данных
+            # Ленивый импорт модели внутри функции
             from app import SiteStats 
             stats = db.session.query(SiteStats).first()
             if stats:
@@ -248,17 +209,14 @@ def track_visitor():
                 db.session.commit()
                 session['tracked_visitor'] = True
             else:
-                try:
-                    new_stats = SiteStats(total_visitors=1)
-                    db.session.add(new_stats)
-                    db.session.commit()
-                    session['tracked_visitor'] = True
-                except:
-                    db.session.rollback()
+                new_stats = SiteStats(total_visitors=1)
+                db.session.add(new_stats)
+                db.session.commit()
+                session['tracked_visitor'] = True
     except Exception as e:
         if 'db' in globals():
             db.session.rollback()
-        print(f">>> [FONTAN] Stat log skipped: {e}")
+        print(f">>> [FONTAN] Visitor tracking paused: {e}")
 # --- Р’РЎРџРћРњРћР“РђРўР•Р›Р¬РќР«Р• Р¤РЈРќРљР¦РР ---
 
 def send_verification_code(email):
