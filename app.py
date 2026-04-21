@@ -128,7 +128,6 @@ WEBRTC_ICE_SERVERS = [
 # Supabase IPv4 Transaction Pooler (работает на Render free tier, нет IPv6):
 # postgresql://postgres.apbtrkzzvnpogpttgbpg:PASSWORD@aws-0-us-east-1.pooler.supabase.com:6543/postgres
 # Найти свой URL: Supabase → Project Settings → Database → Transaction pooler
-
 import os
 import socket
 from sqlalchemy import text
@@ -138,37 +137,42 @@ from flask_socketio import SocketIO
 import cloudinary
 from urllib.parse import urlparse, urlunparse
 
-# --- 1. ФУНКЦИЯ ОБХОДА IPv6 (ДЛЯ RENDER) ---
-def get_ipv4_uri(uri):
-    """Принудительно переводит буквенный хост в цифровой IPv4 адрес"""
+# --- 1. ФУНКЦИЯ ФОРСИРОВАНИЯ ПРАВИЛЬНОГО ПОДКЛЮЧЕНИЯ ---
+def get_fixed_db_uri(uri):
+    """
+    1. Переводит хост в IPv4 (для Render)
+    2. Принудительно ставит логин postgres.PROJECT_ID
+    """
     try:
+        project_id = "apbtrkzzvnpogpttgbpg"
         p = urlparse(uri)
-        if not p.hostname:
-            return uri
-        # Превращаем db.xxx.supabase.co в обычный IP (например 18.x.x.x)
-        ipv4 = socket.gethostbyname(p.hostname)
-        # Собираем URL обратно с цифрами вместо букв
-        new_netloc = f"{p.username}:{p.password}@{ipv4}:{p.port}"
+        
+        # 1. Резолвим IP хоста
+        target_host = p.hostname or "aws-0-eu-central-1.pooler.supabase.com"
+        ipv4 = socket.gethostbyname(target_host)
+        
+        # 2. Формируем спец-логин для пулера Supabase
+        # Если в логине уже есть точка, не дублируем
+        username = p.username or "postgres"
+        if "." not in username:
+            username = f"postgres.{project_id}"
+            
+        # 3. Собираем всё воедино на порт 5432
+        new_netloc = f"{username}:{p.password}@{ipv4}:5432"
         return urlunparse(p._replace(netloc=new_netloc))
     except Exception as e:
-        print(f">>> [FONTAN] Ошибка резолва IP: {e}")
+        print(f">>> [FONTAN] Ошибка обработки URI: {e}")
         return uri
 
 # --- 2. НАСТРОЙКА БАЗЫ ДАННЫХ ---
-# Прямой адрес базы (порт 5432) — самый стабильный вариант
-DEFAULT_URL = (
-    "postgresql+psycopg2://postgres:fontan20261"
-    "@db.apbtrkzzvnpogpttgbpg.supabase.co:5432/postgres"
-    "?sslmode=require"
+raw_url = os.environ.get('DATABASE_URL') or (
+    "postgresql://postgres:fontan20261@aws-0-eu-central-1.pooler.supabase.com:5432/postgres?sslmode=require"
 )
 
-# Берем из Render или используем наш DEFAULT
-raw_url = os.environ.get('DATABASE_URL', DEFAULT_URL)
+# Применяем фикс (IP + правильный логин)
+db_url = get_fixed_db_uri(raw_url)
 
-# Магия: превращаем хост в IP, чтобы не было ошибки "Network is unreachable"
-db_url = get_ipv4_uri(raw_url)
-
-# Фикс протокола для SQLAlchemy
+# Исправляем протокол для SQLAlchemy
 if db_url.startswith("postgres://"):
     db_url = db_url.replace("postgres://", "postgresql://", 1)
 
@@ -176,7 +180,7 @@ app.config['SQLALCHEMY_DATABASE_URI'] = db_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {"poolclass": NullPool}
 
-# --- 3. ИНИЦИАЛИЗАЦИЯ СЕРВИСОВ ---
+# --- 3. ИНИЦИАЛИЗАЦИЯ ---
 db.init_app(app)
 login_manager = LoginManager()
 login_manager.init_app(app)
@@ -191,28 +195,27 @@ cloudinary.config(
     secure=True
 )
 
-# --- 5. БЕЗОПАСНЫЙ ЗАПУСК С ПРОВЕРКОЙ ---
+# --- 5. БЕЗОПАСНЫЙ ЗАПУСК ---
 with app.app_context():
     try:
-        # Печатаем IP в лог, чтобы видеть куда реально стучимся
-        target_host = urlparse(db_url).hostname
-        print(f">>> [FONTAN] ПОПЫТКА ПОДКЛЮЧЕНИЯ К IP: {target_host}")
+        # Печатаем инфо для отладки
+        display_url = app.config['SQLALCHEMY_DATABASE_URI'].split('@')[-1]
+        print(f">>> [FONTAN] КОННЕКТ К: {display_url}")
         
         db.session.execute(text('SELECT 1'))
         db.session.commit()
         db.create_all()
-        print(">>> [FONTAN] SUCCESS: СВЯЗЬ С БАЗОЙ УСТАНОВЛЕНА!")
+        print(">>> [FONTAN] SUCCESS: БАЗА ДАННЫХ ПОДКЛЮЧЕНА!")
     except Exception as e:
-        db.session.rollback()
+        if 'db' in globals(): db.session.rollback()
         print(f">>> [FONTAN] DB STARTUP ERROR: {e}")
-        print(">>> [FONTAN] Приложение запускается БЕЗ БАЗЫ (оффлайн режим)...")
+        print(">>> [FONTAN] Работа в автономном режиме...")
 
 # --- 6. ТРЕКЕР ПОСЕТИТЕЛЕЙ ---
 @app.before_request
 def track_visitor():
     if request.method == 'HEAD' or request.path == '/healthcheck':
         return
-        
     try:
         if not session.get('tracked_visitor'):
             stats = db.session.query(SiteStats).first()
@@ -226,7 +229,7 @@ def track_visitor():
                 db.session.commit()
                 session['tracked_visitor'] = True
     except Exception as e:
-        db.session.rollback()
+        if 'db' in globals(): db.session.rollback()
         print(f">>> [FONTAN] Visitor tracking paused: {e}")
 # --- Р’РЎРџРћРњРћР“РђРўР•Р›Р¬РќР«Р• Р¤РЈРќРљР¦РР ---
 
