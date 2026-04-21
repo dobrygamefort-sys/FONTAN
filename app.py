@@ -136,23 +136,23 @@ from flask_socketio import SocketIO
 import cloudinary
 from flask import request, session
 
-# --- 1. ЖЕСТКАЯ КОНФИГУРАЦИЯ БАЗЫ (ИГНОРИРУЕМ ОШИБКИ RENDER) ---
-# Мы не используем os.environ.get('DATABASE_URL'), так как там может быть старый адрес
-PROJECT_ID = "apbtrkzzvnpogpttgbpg"
-DB_USER = f"postgres.{PROJECT_ID}"  # Обязательный формат для пулера Supabase
-DB_PASS = "fontan20261"
-DB_IP = "18.198.145.223"           # Прямой IPv4 (обход проблемы с IPv6 на Render)
+# --- 1. АБСОЛЮТНО ЖЕСТКАЯ КОНФИГУРАЦИЯ (ИГНОРИРУЕМ ВСЕ ПЕРЕМЕННЫЕ RENDER) ---
+# Данные вшиты напрямую, чтобы исключить влияние старых DATABASE_URL в панели Render
+PROJECT_ID = "apbtrkzzvnpogpttgbpg".strip()
+DB_USER = f"postgres.{PROJECT_ID}"
+DB_PASS = "fontan20261".strip()
+DB_IP = "18.198.145.223"
 DB_NAME = "postgres"
 
-# Собираем финальную строку
+# Собираем URI вручную. Использование IPv4 адреса вместо домена гарантирует работу на Render.
 fixed_uri = f"postgresql://{DB_USER}:{DB_PASS}@{DB_IP}:5432/{DB_NAME}?sslmode=require"
 
 app.config['SQLALCHEMY_DATABASE_URI'] = fixed_uri
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-    "poolclass": NullPool,               # Пулер Supabase сам управляет соединениями
+    "poolclass": NullPool,               # Нулевой пул обязателен для Transaction mode в Supabase
     "connect_args": {
-        "connect_timeout": 15,           # Увеличили таймаут для стабильности
+        "connect_timeout": 20,           # Максимальное время ожидания
         "application_name": "fontan_app"
     }
 }
@@ -162,7 +162,7 @@ db.init_app(app)
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
-# Настройка SocketIO (убедись, что gevent установлен в requirements.txt)
+# SocketIO с поддержкой gevent (важно для продакшена на Render)
 socketio = SocketIO(app, async_mode='gevent', cors_allowed_origins="*")
 
 # --- 3. CLOUDINARY ---
@@ -173,34 +173,36 @@ cloudinary.config(
     secure=True
 )
 
-# --- 4. БЕЗОПАСНЫЙ СТАРТ И ПРОВЕРКА ТАБЛИЦ ---
+# --- 4. ПРОВЕРКА ПРИ СТАРТЕ (ЛОГИРОВАНИЕ В КОНСОЛЬ RENDER) ---
 with app.app_context():
     try:
-        # Логируем попытку (пароль скрыт)
-        print(f">>> [FONTAN] ЗАПУСК: Проверка связи с {DB_IP} под юзером {DB_USER}")
+        # Пароль в лог не выводим для безопасности
+        print(f">>> [FONTAN] ЗАПУСК ПРОВЕРКИ: Юзер [{DB_USER}] -> Хост [{DB_IP}]")
         
-        # Проверка "живая ли база"
+        # Прямой запрос к базе для проверки прав доступа
         db.session.execute(text('SELECT 1'))
         db.session.commit()
-        print(">>> [FONTAN] SUCCESS: База ответила на SELECT 1")
+        print(">>> [FONTAN] SUCCESS: База данных ответила успешно!")
         
-        # Создание таблиц если их нет
+        # Синхронизация таблиц
         db.create_all()
-        print(">>> [FONTAN] SUCCESS: Все таблицы синхронизированы!")
+        print(">>> [FONTAN] SUCCESS: Все таблицы базы данных готовы к работе!")
     except Exception as e:
         if 'db' in globals(): db.session.rollback()
-        print(f">>> [FONTAN] КРИТИЧЕСКАЯ ОШИБКА БАЗЫ: {str(e)}")
-        print(">>> [FONTAN] ПРИЛОЖЕНИЕ ЗАПУЩЕНО В РЕЖИМЕ БЕЗ ДАННЫХ")
+        # Выводим полную ошибку, чтобы понять, если Supabase опять вернет Tenant not found
+        error_msg = str(e)
+        print(f">>> [FONTAN] КРИТИЧЕСКАЯ ОШИБКА: {error_msg}")
+        if "Tenant or user not found" in error_msg:
+            print(">>> [СОВЕТ] Проверь PROJECT_ID в коде. Supabase не видит этот проект.")
 
 # --- 5. ТРЕКЕР ПОСЕТИТЕЛЕЙ (ОПТИМИЗИРОВАННЫЙ) ---
 @app.before_request
 def track_visitor():
-    # Пропускаем системные запросы и статику
     if request.method == 'HEAD' or request.path.startswith(('/healthcheck', '/static', '/favicon.ico')):
         return
     try:
         if not session.get('tracked_visitor'):
-            # Ищем запись статистики
+            # Запрашиваем первую запись статистики
             stats = db.session.query(SiteStats).first()
             if not stats:
                 stats = SiteStats(total_visitors=1)
@@ -212,7 +214,7 @@ def track_visitor():
             session['tracked_visitor'] = True
     except Exception as e:
         if 'db' in globals(): db.session.rollback()
-        # Ошибка трекера не должна прерывать работу сайта
+        # Ошибка в трекере не должна мешать пользователю войти на сайт
         pass
 # --- Р’РЎРџРћРњРћР“РђРўР•Р›Р¬РќР«Р• Р¤РЈРќРљР¦РР ---
 
