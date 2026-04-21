@@ -139,16 +139,15 @@ import cloudinary
 port = int(os.environ.get("PORT", 10000))
 
 # --- 2. КОНФИГУРАЦИЯ БАЗЫ (SUPABASE POOLER MODE) ---
+# --- КОНФИГУРАЦИЯ БАЗЫ (SUPABASE POOLER FIX) ---
 PROJECT_ID = "apbtrkzzvnpogpttgbpg"
-# ВАЖНО: Для пулера логин ОБЯЗАТЕЛЬНО должен быть с точкой и ID проекта
 DB_USER = f"postgres.{PROJECT_ID}" 
 DB_PASS = "fontan20261"
-# Официальный хост пулера для твоего региона (Франкфурт)
 DB_HOST = "aws-0-eu-central-1.pooler.supabase.com" 
 DB_NAME = "postgres"
 
-# Порт 6543 (Transaction Mode) — самый стабильный для облачных хостингов
-fixed_uri = f"postgresql://{DB_USER}:{DB_PASS}@{DB_HOST}:6543/{DB_NAME}?sslmode=require"
+# Мы добавляем 'options' в URL, чтобы пулер точно нашел твой проект
+fixed_uri = f"postgresql://{DB_USER}:{DB_PASS}@{DB_HOST}:6543/{DB_NAME}?sslmode=require&options=project%3D{PROJECT_ID}"
 
 app.config['SQLALCHEMY_DATABASE_URI'] = fixed_uri
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -156,8 +155,7 @@ app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     "poolclass": NullPool,
     "connect_args": {
         "connect_timeout": 30,
-        "application_name": "fontan_app",
-        "sslmode": "require"
+        "application_name": "fontan_app"
     }
 }
 
