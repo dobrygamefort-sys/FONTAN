@@ -138,23 +138,23 @@ from flask import request, session
 
 # --- 1. АБСОЛЮТНО ЖЕСТКАЯ КОНФИГУРАЦИЯ (ИГНОРИРУЕМ ВСЕ ПЕРЕМЕННЫЕ RENDER) ---
 # Данные вшиты напрямую, чтобы исключить влияние старых DATABASE_URL в панели Render
-PROJECT_ID = "apbtrkzzvnpogpttgbpg".strip()
+# --- ФИНАЛЬНЫЙ ГИБРИДНЫЙ ВАРЬЯНТ ---
+PROJECT_ID = "apbtrkzzvnpogpttgbpg"
 DB_USER = f"postgres.{PROJECT_ID}"
-DB_PASS = "fontan20261".strip()
-
-# МЕНЯЕМ ЗДЕСЬ: Вместо IP используем домен Supabase
-DB_HOST = f"db.{PROJECT_ID}.supabase.co" 
+DB_PASS = "fontan20261"
+DB_IP = "18.198.145.223"  # Тот самый IPv4, который Render точно видит
 DB_NAME = "postgres"
 
-# МЕНЯЕМ ЗДЕСЬ: Порт 6543 вместо 5432 и DB_HOST вместо DB_IP
-fixed_uri = f"postgresql://{DB_USER}:{DB_PASS}@{DB_HOST}:6543/{DB_NAME}?sslmode=require"
+# Соединяем: IPv4 адрес + ПОРТ 6543 (пулер)
+# Это обходит и "Tenant not found", и "Network unreachable"
+fixed_uri = f"postgresql://{DB_USER}:{DB_PASS}@{DB_IP}:6543/{DB_NAME}?sslmode=require"
 
 app.config['SQLALCHEMY_DATABASE_URI'] = fixed_uri
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     "poolclass": NullPool,
     "connect_args": {
-        "connect_timeout": 20,
+        "connect_timeout": 30,
         "application_name": "fontan_app"
     }
 }
