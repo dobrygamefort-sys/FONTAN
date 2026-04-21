@@ -138,25 +138,16 @@ if _db_url:
     # Render иногда даёт устаревший postgres:// — фиксим
     if _db_url.startswith('postgres://'):
         _db_url = _db_url.replace('postgres://', 'postgresql://', 1)
-    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-    "poolclass": NullPool,
-}
-    # Supabase Transaction Pooler (IPv4, работает на Render free tier)
-    _sb_user = quote_plus("postgres.apbtrkzzvnpogpttgbpg")
-    _sb_pass = quote_plus("FontanAdmin2026")
-    _sb_host = "aws-0-eu-central-1.pooler.supabase.com"
-    _sb_port = "6543"
-    _sb_db   = "postgres"
+    app.config['SQLALCHEMY_DATABASE_URI'] = _db_url
+else:
+    # Supabase прямое подключение (работает на Render)
     app.config['SQLALCHEMY_DATABASE_URI'] = (
-        f"postgresql+psycopg2://{_sb_user}:{_sb_pass}"
-        f"@{_sb_host}:{_sb_port}/{_sb_db}?sslmode=require"
+        "postgresql+psycopg2://postgres:fontan20261"
+        "@db.apbtrkzzvnpogpttgbpg.supabase.co:5432/postgres?sslmode=require"
     )
-    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-        "poolclass": NullPool,
-        "connect_args": {"options": "-c prepare_threshold=0"},
-    }
 
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {"poolclass": NullPool}
 
 # --- 2. ИНИЦИАЛИЗАЦИЯ ---
 db.init_app(app)
@@ -1086,8 +1077,6 @@ class GroupJoinRequest(db.Model):
     status = db.Column(db.String(30), default='pending')
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-ensure_user_sessions_schema()
 
 @login_manager.user_loader
 
@@ -9886,6 +9875,11 @@ def on_call_signal(data):
 with app.app_context():
 
     db.create_all()
+
+    try:
+        ensure_user_sessions_schema()
+    except Exception as _e:
+        print(f">>> ensure_user_sessions_schema skipped: {_e}")
 
     # --- Р’Р Р•РњР•РќРќР«Р™ Р¤РРљРЎ Р‘РђР—Р« Р”РђРќРќР«РҐ (Р›Р•Р§Р•РќРР• РћРЁРР‘РљР) ---
 
