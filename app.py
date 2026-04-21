@@ -138,16 +138,15 @@ import cloudinary
 # --- 1. ПОРТ ДЛЯ RENDER ---
 port = int(os.environ.get("PORT", 10000))
 
-# --- 2. КОНФИГУРАЦИЯ БАЗЫ (SUPABASE POOLER MODE) ---
-# --- КОНФИГУРАЦИЯ БАЗЫ (SUPABASE POOLER FIX) ---
+# --- 2. КОНФИГУРАЦИЯ БАЗЫ (SUPABASE POOLER FIX) ---
 PROJECT_ID = "apbtrkzzvnpogpttgbpg"
 DB_USER = f"postgres.{PROJECT_ID}" 
 DB_PASS = "fontan20261"
 DB_HOST = "aws-0-eu-central-1.pooler.supabase.com" 
 DB_NAME = "postgres"
 
-# Мы добавляем 'options' в URL, чтобы пулер точно нашел твой проект
-fixed_uri = f"postgresql://{DB_USER}:{DB_PASS}@{DB_HOST}:6543/{DB_NAME}?sslmode=require&options=project%3D{PROJECT_ID}"
+# Формируем чистый URI (options переносим в connect_args ниже)
+fixed_uri = f"postgresql://{DB_USER}:{DB_PASS}@{DB_HOST}:6543/{DB_NAME}?sslmode=require"
 
 app.config['SQLALCHEMY_DATABASE_URI'] = fixed_uri
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -155,7 +154,9 @@ app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     "poolclass": NullPool,
     "connect_args": {
         "connect_timeout": 30,
-        "application_name": "fontan_app"
+        "application_name": "fontan_app",
+        # Это ПРЯМОЕ указание проекта для пулера, чтобы не было 'Tenant not found'
+        "options": f"-c project={PROJECT_ID}"
     }
 }
 
@@ -178,7 +179,7 @@ cloudinary.config(
 # --- 5. ПРОВЕРКА ПРИ СТАРТЕ ---
 with app.app_context():
     try:
-        print(f">>> [FONTAN] ПОДКЛЮЧЕНИЕ ЧЕРЕЗ ПУЛЕР: {DB_HOST}")
+        print(f">>> [FONTAN] ПОДКЛЮЧЕНИЕ ЧЕРЕЗ ПУЛЕР (6543): {PROJECT_ID}")
         db.session.execute(text('SELECT 1'))
         db.session.commit()
         print(">>> [FONTAN] SUCCESS: База данных (Пулер) отвечает!")
@@ -9997,14 +9998,13 @@ with app.app_context():
 # --- ПРОВЕРКА ПРИ СТАРТЕ, СОЗДАНИЕ АДМИНА И ЗАПУСК ---
 with app.app_context():
     try:
-        # 1. Проверяем связь с базой
+        print(f">>> [FONTAN] ПРОВЕРКА ПУЛЕРА: {PROJECT_ID}")
         db.session.execute(text('SELECT 1'))
         db.session.commit()
         
-        # 2. Создаем таблицы
         db.create_all() 
         
-        # 3. Проверяем/Создаем админа
+        # Проверка админа
         admin = User.query.filter_by(username='admin').first()
         if not admin:
             print(">>> [FONTAN] Создаю админа...")
@@ -10019,18 +10019,15 @@ with app.app_context():
             )
             db.session.add(admin)
             db.session.commit()
-            print(">>> [FONTAN] Админ создан успешно!")
+            print(">>> [FONTAN] Админ готов!")
         else:
-            print(">>> [FONTAN] Админ уже в системе.")
+            print(">>> [FONTAN] Админ найден.")
             
     except Exception as e:
-        print(f">>> [FONTAN] Критическая ошибка при старте: {e}")
-        try:
-            db.session.rollback()
-        except:
-            pass
+        print(f">>> [FONTAN] ОШИБКА: {e}")
+        try: db.session.rollback()
+        except: pass
 
-# --- ГЛАВНЫЙ ЗАПУСК (РЕШАЕТ ОШИБКУ NO OPEN PORTS) ---
 if __name__ == '__main__':
-    # host='0.0.0.0' и port=port обязательны для Render!
+    # Этот запуск критичен для Render!
     socketio.run(app, host='0.0.0.0', port=port)
