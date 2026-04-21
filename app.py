@@ -136,8 +136,9 @@ from sqlalchemy.pool import NullPool
 # Supabase Transaction Pooler — IPv4, порт 6543, работает на Render free tier
 # username ОБЯЗАТЕЛЬНО = postgres.PROJECT_REF (не просто postgres!)
 SUPABASE_URL = (
-    "postgresql+psycopg2://postgres.apbtrkzzvnpogpttgbpg:fontan20261"
-    "@aws-0-eu-central-1.pooler.supabase.com:6543/postgres?sslmode=require"
+    "postgresql+psycopg2://postgres:fontan20261"
+    "@aws-0-eu-central-1.pooler.supabase.com:6543/postgres"
+    "?sslmode=require&options=project%3Dapbtrkzzvnpogpttgbpg"
 )
 app.config['SQLALCHEMY_DATABASE_URI'] = SUPABASE_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
