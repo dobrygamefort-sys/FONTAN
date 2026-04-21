@@ -131,34 +131,24 @@ WEBRTC_ICE_SERVERS = [
 import os
 from sqlalchemy import text
 from sqlalchemy.pool import NullPool
-from flask_login import LoginManager
-from flask_socketio import SocketIO
-import cloudinary
-from flask import request, session
-
-# --- 1. АБСОЛЮТНО ЖЕСТКАЯ КОНФИГУРАЦИЯ (ИГНОРИРУЕМ ВСЕ ПЕРЕМЕННЫЕ RENDER) ---
-# Данные вшиты напрямую, чтобы исключить влияние старых DATABASE_URL в панели Render
-# --- ФИНАЛЬНЫЙ ГИБРИДНЫЙ ВАРЬЯНТ ---
-# --- РАБОЧИЙ ГИБРИД (ДЛЯ РЕГИОНА EU-CENTRAL-1) ---
-import os
-from sqlalchemy import text
-from sqlalchemy.pool import NullPool
 from flask_socketio import SocketIO
 from flask_login import LoginManager
 import cloudinary
 
-# --- 1. КОНФИГУРАЦИЯ БАЗЫ ДАННЫХ (ФИКС IPv4) ---
+# --- 1. ПОРТ ДЛЯ RENDER ---
+port = int(os.environ.get("PORT", 10000))
+
+# --- 2. КОНФИГУРАЦИЯ БАЗЫ (SUPABASE POOLER MODE) ---
 PROJECT_ID = "apbtrkzzvnpogpttgbpg"
-DB_USER = "postgres" 
+# ВАЖНО: Для пулера логин ОБЯЗАТЕЛЬНО должен быть с точкой и ID проекта
+DB_USER = f"postgres.{PROJECT_ID}" 
 DB_PASS = "fontan20261"
-
-# Используем ПРЯМОЙ IP адрес Supabase для твоего региона (EU-Central)
-# Это лечит ошибку "Network is unreachable", обходя IPv6
-DB_HOST = "172.64.149.246" 
+# Официальный хост пулера для твоего региона (Франкфурт)
+DB_HOST = "aws-0-eu-central-1.pooler.supabase.com" 
 DB_NAME = "postgres"
 
-# Прямой порт 5432
-fixed_uri = f"postgresql://{DB_USER}:{DB_PASS}@{DB_HOST}:5432/{DB_NAME}?sslmode=require"
+# Порт 6543 (Transaction Mode) — самый стабильный для облачных хостингов
+fixed_uri = f"postgresql://{DB_USER}:{DB_PASS}@{DB_HOST}:6543/{DB_NAME}?sslmode=require"
 
 app.config['SQLALCHEMY_DATABASE_URI'] = fixed_uri
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -171,16 +161,15 @@ app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     }
 }
 
-# --- 2. ИНИЦИАЛИЗАЦИЯ СЕРВИСОВ ---
+# --- 3. ИНИЦИАЛИЗАЦИЯ ---
 db.init_app(app)
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 
-# SocketIO с поддержкой gevent
 socketio = SocketIO(app, async_mode='gevent', cors_allowed_origins="*")
 
-# --- 3. CLOUDINARY ---
+# --- 4. CLOUDINARY ---
 cloudinary.config(
     cloud_name='daz4839e7', 
     api_key='371541773313745', 
@@ -188,46 +177,21 @@ cloudinary.config(
     secure=True
 )
 
-# --- 4. ПРОВЕРКА ПРИ СТАРТЕ ---
+# --- 5. ПРОВЕРКА ПРИ СТАРТЕ ---
 with app.app_context():
     try:
-        # В логах теперь будет видно именно подключение по IP
-        print(f">>> [FONTAN] ЗАПУСК ПРОВЕРКИ (IP-FIX): Юзер [{DB_USER}] -> IP [{DB_HOST}]")
-        
-        # Проверочный запрос
+        print(f">>> [FONTAN] ПОДКЛЮЧЕНИЕ ЧЕРЕЗ ПУЛЕР: {DB_HOST}")
         db.session.execute(text('SELECT 1'))
         db.session.commit()
-        print(">>> [FONTAN] SUCCESS: База данных ответила успешно!")
-        
-        # Синхронизация таблиц
+        print(">>> [FONTAN] SUCCESS: База данных (Пулер) отвечает!")
         db.create_all()
-        print(">>> [FONTAN] SUCCESS: Все таблицы базы данных готовы к работе!")
     except Exception as e:
         if 'db' in globals(): db.session.rollback()
-        error_msg = str(e)
-        print(f">>> [FONTAN] КРИТИЧЕСКАЯ ОШИБКА: {error_msg}")
-        if "unreachable" in error_msg.lower():
-            print(">>> [СОВЕТ] Render блокирует IP. Попробуй нажать 'Clear build cache and deploy'.")
+        print(f">>> [FONTAN] ОШИБКА БАЗЫ: {str(e)}")
 
-# --- 5. ТРЕКЕР ПОСЕТИТЕЛЕЙ ---
-@app.before_request
-def track_visitor():
-    if request.method == 'HEAD' or request.path.startswith(('/healthcheck', '/static', '/favicon.ico')):
-        return
-    try:
-        if not session.get('tracked_visitor'):
-            stats = db.session.query(SiteStats).first()
-            if not stats:
-                stats = SiteStats(total_visitors=1)
-                db.session.add(stats)
-            else:
-                stats.total_visitors = (stats.total_visitors or 0) + 1
-            
-            db.session.commit()
-            session['tracked_visitor'] = True
-    except Exception as e:
-        if 'db' in globals(): db.session.rollback()
-        print(f">>> [APP LOG] track_visitor error: {str(e)}")
+# --- ЗАПУСК (В САМОМ КОНЦЕ ФАЙЛА) ---
+# if __name__ == '__main__':
+#     socketio.run(app, host='0.0.0.0', port=port)
 # --- Р’РЎРџРћРњРћР“РђРўР•Р›Р¬РќР«Р• Р¤РЈРќРљР¦РР ---
 
 def send_verification_code(email):
@@ -10032,11 +9996,17 @@ with app.app_context():
     # ---------------------------------------------------
 
     # Создание админа
+# --- ПРОВЕРКА ПРИ СТАРТЕ, СОЗДАНИЕ АДМИНА И ЗАПУСК ---
 with app.app_context():
-    try:  # Этот блок должен быть внутри with (сдвинут на 4 пробела)
-        # Проверяем наличие таблиц и админа
+    try:
+        # 1. Проверяем связь с базой
+        db.session.execute(text('SELECT 1'))
+        db.session.commit()
+        
+        # 2. Создаем таблицы
         db.create_all() 
         
+        # 3. Проверяем/Создаем админа
         admin = User.query.filter_by(username='admin').first()
         if not admin:
             print(">>> [FONTAN] Создаю админа...")
@@ -10052,11 +10022,17 @@ with app.app_context():
             db.session.add(admin)
             db.session.commit()
             print(">>> [FONTAN] Админ создан успешно!")
+        else:
+            print(">>> [FONTAN] Админ уже в системе.")
+            
     except Exception as e:
-        # Сдвинуто на один уровень с try
-        print(f">>> [FONTAN] Критическая ошибка базы при старте: {e}")
-        # Используйте проверку, чтобы rollback не упал, если db не инициализирована
+        print(f">>> [FONTAN] Критическая ошибка при старте: {e}")
         try:
             db.session.rollback()
         except:
             pass
+
+# --- ГЛАВНЫЙ ЗАПУСК (РЕШАЕТ ОШИБКУ NO OPEN PORTS) ---
+if __name__ == '__main__':
+    # host='0.0.0.0' и port=port обязательны для Render!
+    socketio.run(app, host='0.0.0.0', port=port)
