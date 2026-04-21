@@ -147,16 +147,16 @@ from flask_socketio import SocketIO
 from flask_login import LoginManager
 import cloudinary
 
-# --- 1. КОНФИГУРАЦИЯ БАЗЫ ДАННЫХ ---
+# --- 1. КОНФИГУРАЦИЯ БАЗЫ ДАННЫХ (ПРЯМОЕ ПОДКЛЮЧЕНИЕ) ---
 PROJECT_ID = "apbtrkzzvnpogpttgbpg"
-DB_USER = f"postgres.{PROJECT_ID}"
+DB_USER = "postgres"  # При прямом подключении точка с ID обычно не нужна
 DB_PASS = "fontan20261"
-# Официальный адрес пулера для региона EU (Frankfurt)
-DB_HOST = "aws-0-eu-central-1.pooler.supabase.com" 
+# Прямой хост твоего проекта
+DB_HOST = f"db.{PROJECT_ID}.supabase.co" 
 DB_NAME = "postgres"
 
-# Собираем строку для порта 6543 (Transaction Mode)
-fixed_uri = f"postgresql://{DB_USER}:{DB_PASS}@{DB_HOST}:6543/{DB_NAME}?sslmode=require"
+# Используем порт 5432 (Direct Connection) вместо 6543
+fixed_uri = f"postgresql://{DB_USER}:{DB_PASS}@{DB_HOST}:5432/{DB_NAME}?sslmode=require"
 
 app.config['SQLALCHEMY_DATABASE_URI'] = fixed_uri
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -189,8 +189,7 @@ cloudinary.config(
 # --- 4. ПРОВЕРКА ПРИ СТАРТЕ ---
 with app.app_context():
     try:
-        # Теперь выводим DB_HOST вместо DB_IP, чтобы не было ошибки "not defined"
-        print(f">>> [FONTAN] ЗАПУСК ПРОВЕРКИ: Юзер [{DB_USER}] -> Хост [{DB_HOST}]")
+        print(f">>> [FONTAN] ЗАПУСК ПРОВЕРКИ (DIRECT): Юзер [{DB_USER}] -> Хост [{DB_HOST}]")
         
         # Прямой запрос к базе
         db.session.execute(text('SELECT 1'))
@@ -201,11 +200,11 @@ with app.app_context():
         db.create_all()
         print(">>> [FONTAN] SUCCESS: Все таблицы базы данных готовы к работе!")
     except Exception as e:
-        db.session.rollback()
+        if 'db' in globals(): db.session.rollback()
         error_msg = str(e)
         print(f">>> [FONTAN] КРИТИЧЕСКАЯ ОШИБКА: {error_msg}")
         if "Tenant or user not found" in error_msg:
-            print(">>> [СОВЕТ] Проверь PROJECT_ID. Если он верен, попробуй сбросить пароль в Supabase.")
+            print(">>> [СОВЕТ] Ошибка пулера. Но мы перешли на прямой порт 5432, проверь пароль!")
 
 # --- 5. ТРЕКЕР ПОСЕТИТЕЛЕЙ ---
 @app.before_request
@@ -224,8 +223,7 @@ def track_visitor():
             db.session.commit()
             session['tracked_visitor'] = True
     except Exception as e:
-        db.session.rollback()
-        # Ошибка в трекере не блокирует работу сайта
+        if 'db' in globals(): db.session.rollback()
         print(f">>> [APP LOG] track_visitor error: {str(e)}")
 # --- Р’РЎРџРћРњРћР“РђРўР•Р›Р¬РќР«Р• Р¤РЈРќРљР¦РР ---
 
