@@ -141,38 +141,35 @@ from flask_socketio import SocketIO
 from flask_login import LoginManager
 import cloudinary
 
-# --- 1. ПОРТ ---
+# --- ПОРТ ---
 port = int(os.environ.get("PORT", 8080))
 
-# --- 2. КОНФИГУРАЦИЯ БАЗЫ (ТОЛЬКО RAILWAY) ---
-# Мы убрали все упоминания Supabase, чтобы не ловить таймауты
+# --- КОНФИГУРАЦИЯ БАЗЫ ---
 db_url = os.environ.get("DATABASE_URL")
 
-if not db_url:
-    # Если переменная пустая, выводим четкую ошибку в логи
-    print(">>> [FONTAN] КРИТИЧЕСКАЯ ОШИБКА: DATABASE_URL не найдена в переменных Railway!")
-else:
-    # Фикс протокола для SQLAlchemy
+if db_url:
+    # Фикс для SQLAlchemy (postgres:// -> postgresql://)
     if db_url.startswith("postgres://"):
         db_url = db_url.replace("postgres://", "postgresql://", 1)
+else:
+    print(">>> [FONTAN] ВНИМАНИЕ: DATABASE_URL не найдена!")
 
 app.config['SQLALCHEMY_DATABASE_URI'] = db_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    "poolclass": NullPool if 'NullPool' in globals() else None,
     "connect_args": {"connect_timeout": 10}
 }
 
-# --- 3. ИНИЦИАЛИЗАЦИЯ ---
+# --- ИНИЦИАЛИЗАЦИЯ ---
 db.init_app(app)
-
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 
-# Воркер gevent на Railway — база для SocketIO
 socketio = SocketIO(app, async_mode='gevent', cors_allowed_origins="*")
 
-# --- 4. CLOUDINARY ---
+# --- CLOUDINARY ---
 cloudinary.config(
     cloud_name='daz4839e7', 
     api_key='371541773313745', 
@@ -180,19 +177,21 @@ cloudinary.config(
     secure=True
 )
 
-# --- 5. ЧИСТАЯ ПРОВЕРКА ПРИ СТАРТЕ ---
+# --- ЧИСТАЯ ПРОВЕРКА ПРИ СТАРТЕ ---
 with app.app_context():
-    if db_url:
-        try:
-            print(f">>> [FONTAN] ПОДКЛЮЧЕНИЕ К ВНУТРЕННЕЙ БАЗЕ RAILWAY...")
-            db.session.execute(text('SELECT 1'))
-            db.session.commit()
-            print(">>> [FONTAN] SUCCESS: Связь с базой установлена!")
-            db.create_all()
-        except Exception as e:
-            print(f">>> [FONTAN] ОШИБКА БАЗЫ: {str(e)}")
-    else:
-        print(">>> [FONTAN] СТАРТ БЕЗ БАЗЫ (ПРОВЕРЬ ПЕРЕМЕННЫЕ)")
+    try:
+        print(">>> [FONTAN] ПРОВЕРКА ПОДКЛЮЧЕНИЯ К БАЗЕ...")
+        if not db_url:
+            raise ValueError("DATABASE_URL is missing!")
+            
+        db.session.execute(text('SELECT 1'))
+        db.session.commit()
+        print(">>> [FONTAN] SUCCESS: База данных отвечает!")
+        db.create_all()
+    except Exception as e:
+        if 'db' in globals(): db.session.rollback()
+        # Специально выводим текст ошибки, чтобы понять, что не так
+        print(f">>> [FONTAN] ОШИБКА БАЗЫ: {str(e)}")
 
 def send_verification_code(email):
 
