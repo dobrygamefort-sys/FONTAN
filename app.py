@@ -129,40 +129,37 @@ WEBRTC_ICE_SERVERS = [
 # postgresql://postgres.apbtrkzzvnpogpttgbpg:PASSWORD@aws-0-us-east-1.pooler.supabase.com:6543/postgres
 # Найти свой URL: Supabase → Project Settings → Database → Transaction pooler
 import os
-import urllib.parse
 from sqlalchemy import text
-from sqlalchemy.pool import NullPool
+from flask_socketio import SocketIO
+from flask_login import LoginManager
+import cloudinary
+
+# --- 1. ПОРТ (Railway ставит его сам) ---
+import os
+from sqlalchemy import text
 from flask_socketio import SocketIO
 from flask_login import LoginManager
 import cloudinary
 
 # --- 1. ПОРТ ---
-port = int(os.environ.get("PORT", 10000))
+port = int(os.environ.get("PORT", 8080))
 
-# --- 2. КОНФИГУРАЦИЯ БАЗЫ (DIRECT IPV6 CONNECTION) ---
-# На Railway мы используем ПРЯМОЙ хост. 
-# Это обходит пулер и ошибку "Tenant or user not found".
-PROJECT_ID = "apbtrkzzvnpogpttgbpg"
-DB_PASS = "fontan20261"
-DB_USER = "postgres"  # При прямом подключении точка и ID проекта НЕ НУЖНЫ
-# Прямой хост базы данных Supabase
-DB_HOST = f"db.{PROJECT_ID}.supabase.co" 
-DB_NAME = "postgres"
+# --- 2. КОНФИГУРАЦИЯ БАЗЫ (ТОЛЬКО RAILWAY) ---
+# Мы убрали все упоминания Supabase, чтобы не ловить таймауты
+db_url = os.environ.get("DATABASE_URL")
 
-encoded_pass = urllib.parse.quote_plus(DB_PASS)
+if not db_url:
+    # Если переменная пустая, выводим четкую ошибку в логи
+    print(">>> [FONTAN] КРИТИЧЕСКАЯ ОШИБКА: DATABASE_URL не найдена в переменных Railway!")
+else:
+    # Фикс протокола для SQLAlchemy
+    if db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql://", 1)
 
-# Прямое подключение через стандартный порт 5432
-# Railway отлично дружит с IPv6, поэтому коннект будет стабильным
-fixed_uri = f"postgresql://{DB_USER}:{encoded_pass}@{DB_HOST}:5432/{DB_NAME}?sslmode=require"
-
-app.config['SQLALCHEMY_DATABASE_URI'] = fixed_uri
+app.config['SQLALCHEMY_DATABASE_URI'] = db_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-    "poolclass": NullPool, # Для прямого коннекта на бесплатном тарифе лучше без пула
-    "connect_args": {
-        "connect_timeout": 30,
-        "application_name": "fontan_app"
-    }
+    "connect_args": {"connect_timeout": 10}
 }
 
 # --- 3. ИНИЦИАЛИЗАЦИЯ ---
@@ -172,7 +169,7 @@ login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 
-# Использование gevent обязательно для стабильной работы сокетов на Railway
+# Воркер gevent на Railway — база для SocketIO
 socketio = SocketIO(app, async_mode='gevent', cors_allowed_origins="*")
 
 # --- 4. CLOUDINARY ---
@@ -183,23 +180,19 @@ cloudinary.config(
     secure=True
 )
 
-# --- 5. ПРОВЕРКА ПРИ СТАРТЕ ---
+# --- 5. ЧИСТАЯ ПРОВЕРКА ПРИ СТАРТЕ ---
 with app.app_context():
-    try:
-        print(f">>> [FONTAN] ПРЯМОЕ ПОДКЛЮЧЕНИЕ (IPv6): {DB_HOST}")
-        # Простой запрос для проверки связи
-        db.session.execute(text('SELECT 1'))
-        db.session.commit()
-        print(">>> [FONTAN] SUCCESS: База данных Supabase подключена напрямую через Railway!")
-        
-        # Создаем таблицы
-        db.create_all()
-        print(">>> [FONTAN] Таблицы проверены/созданы.")
-    except Exception as e:
-        if 'db' in globals():
-            db.session.rollback()
-        print(f">>> [FONTAN] ОШИБКА ПОДКЛЮЧЕНИЯ: {str(e)}")
-        print(">>> СОВЕТ: Убедись, что пароль 'fontan20261' верный в настройках Supabase.")
+    if db_url:
+        try:
+            print(f">>> [FONTAN] ПОДКЛЮЧЕНИЕ К ВНУТРЕННЕЙ БАЗЕ RAILWAY...")
+            db.session.execute(text('SELECT 1'))
+            db.session.commit()
+            print(">>> [FONTAN] SUCCESS: Связь с базой установлена!")
+            db.create_all()
+        except Exception as e:
+            print(f">>> [FONTAN] ОШИБКА БАЗЫ: {str(e)}")
+    else:
+        print(">>> [FONTAN] СТАРТ БЕЗ БАЗЫ (ПРОВЕРЬ ПЕРЕМЕННЫЕ)")
 
 def send_verification_code(email):
 
