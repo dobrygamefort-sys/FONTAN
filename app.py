@@ -139,36 +139,40 @@ import cloudinary
 # --- 1. ПОРТ ---
 port = int(os.environ.get("PORT", 10000))
 
-# --- 2. КОНФИГУРАЦИЯ БАЗЫ (THE CORRECT WAY) ---
+# --- 2. КОНФИГУРАЦИЯ БАЗЫ (DIRECT IPV6 CONNECTION) ---
+# На Railway мы используем ПРЯМОЙ хост. 
+# Это обходит пулер и ошибку "Tenant or user not found".
 PROJECT_ID = "apbtrkzzvnpogpttgbpg"
 DB_PASS = "fontan20261"
-DB_USER = f"postgres.{PROJECT_ID}"
-DB_HOST = "aws-0-eu-central-1.pooler.supabase.com"
+DB_USER = "postgres"  # При прямом подключении точка и ID проекта НЕ НУЖНЫ
+# Прямой хост базы данных Supabase
+DB_HOST = f"db.{PROJECT_ID}.supabase.co" 
 DB_NAME = "postgres"
 
 encoded_pass = urllib.parse.quote_plus(DB_PASS)
 
-# Чистый URI без лишних параметров в строке
-fixed_uri = f"postgresql://{DB_USER}:{encoded_pass}@{DB_HOST}:6543/{DB_NAME}?sslmode=require"
+# Прямое подключение через стандартный порт 5432
+# Railway отлично дружит с IPv6, поэтому коннект будет стабильным
+fixed_uri = f"postgresql://{DB_USER}:{encoded_pass}@{DB_HOST}:5432/{DB_NAME}?sslmode=require"
 
 app.config['SQLALCHEMY_DATABASE_URI'] = fixed_uri
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-    "poolclass": NullPool,
+    "poolclass": NullPool, # Для прямого коннекта на бесплатном тарифе лучше без пула
     "connect_args": {
         "connect_timeout": 30,
-        "application_name": "fontan_app",
-        # ПЕРЕДАЕМ ПАРАМЕТР ЗДЕСЬ, А НЕ В URI:
-        "options": "-c prepared_statements=off" 
+        "application_name": "fontan_app"
     }
 }
 
 # --- 3. ИНИЦИАЛИЗАЦИЯ ---
 db.init_app(app)
+
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 
+# Использование gevent обязательно для стабильной работы сокетов на Railway
 socketio = SocketIO(app, async_mode='gevent', cors_allowed_origins="*")
 
 # --- 4. CLOUDINARY ---
@@ -179,17 +183,23 @@ cloudinary.config(
     secure=True
 )
 
-# --- 5. ПРОВЕРКА ---
+# --- 5. ПРОВЕРКА ПРИ СТАРТЕ ---
 with app.app_context():
     try:
-        print(f">>> [FONTAN] ПОДКЛЮЧЕНИЕ ЧЕРЕЗ ПУЛЕР (6543): {PROJECT_ID}")
+        print(f">>> [FONTAN] ПРЯМОЕ ПОДКЛЮЧЕНИЕ (IPv6): {DB_HOST}")
+        # Простой запрос для проверки связи
         db.session.execute(text('SELECT 1'))
         db.session.commit()
-        print(">>> [FONTAN] SUCCESS: База данных (Пулер) отвечает!")
+        print(">>> [FONTAN] SUCCESS: База данных Supabase подключена напрямую через Railway!")
+        
+        # Создаем таблицы
         db.create_all()
+        print(">>> [FONTAN] Таблицы проверены/созданы.")
     except Exception as e:
-        if 'db' in globals(): db.session.rollback()
-        print(f">>> [FONTAN] ОШИБКА БАЗЫ: {str(e)}")
+        if 'db' in globals():
+            db.session.rollback()
+        print(f">>> [FONTAN] ОШИБКА ПОДКЛЮЧЕНИЯ: {str(e)}")
+        print(">>> СОВЕТ: Убедись, что пароль 'fontan20261' верный в настройках Supabase.")
 
 def send_verification_code(email):
 
