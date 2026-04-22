@@ -2355,7 +2355,7 @@ templates = {
 
                         История
 
-                        <input type="file" name="story_media" hidden accept="image/*,video/*">
+                        <input type="file" name="story_media" hidden accept="image/*,video/*" onchange="this.closest('form').submit()">
 
                     </label>
 
@@ -2591,6 +2591,12 @@ function loadMorePosts() {
 
                 }
 
+                if (window.initRecordButtons) {
+
+                    window.initRecordButtons(container);
+
+                }
+
                 isLoading = false;
 
             } else {
@@ -2613,67 +2619,78 @@ function loadMorePosts() {
 
 }
 
-document.querySelectorAll('.btn-record-comment').forEach(btn => {
+function initRecordButtons(root) {
 
-    let mediaRecorder;
+    (root || document).querySelectorAll('.btn-record-comment').forEach(btn => {
 
-    let audioChunks = [];
+        if (btn.dataset.recordBound === '1') return;
 
-    let isRecording = false;
+        btn.dataset.recordBound = '1';
 
-    btn.addEventListener('click', async () => {
+        let mediaRecorder;
 
-        const postId = btn.dataset.postId;
+        let audioChunks = [];
 
-        if (!isRecording) {
+        let isRecording = false;
 
-            try {
+        btn.addEventListener('click', async () => {
 
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const postId = btn.dataset.postId;
 
-                mediaRecorder = new MediaRecorder(stream);
+            if (!isRecording) {
 
-                mediaRecorder.start();
+                try {
 
-                btn.classList.remove('btn-danger');
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-                btn.classList.add('btn-warning', 'blink');
+                    mediaRecorder = new MediaRecorder(stream);
 
-                isRecording = true;
+                    mediaRecorder.start();
 
-                mediaRecorder.addEventListener("dataavailable", event => { audioChunks.push(event.data); });
+                    btn.classList.remove('btn-danger');
 
-                mediaRecorder.addEventListener("stop", () => {
+                    btn.classList.add('btn-warning', 'blink');
 
-                    const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                    isRecording = true;
 
-                    const formData = new FormData();
+                    mediaRecorder.addEventListener("dataavailable", event => { audioChunks.push(event.data); });
 
-                    formData.append("voice", audioBlob, "voice.webm");
+                    mediaRecorder.addEventListener("stop", () => {
 
-                    fetch(`/add_voice_comment/${postId}`, { method: 'POST', body: formData }).then(r => location.reload());
+                        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
 
-                    audioChunks = [];
+                        const formData = new FormData();
 
-                });
+                        formData.append("voice", audioBlob, "voice.webm");
 
-            } catch (err) { alert("Нет доступа к микрофону!"); }
+                        fetch(`/add_voice_comment/${postId}`, { method: 'POST', body: formData }).then(r => location.reload());
 
-        } else {
+                        audioChunks = [];
 
-            mediaRecorder.stop();
+                    });
 
-            btn.classList.add('btn-danger');
+                } catch (err) { alert("Нет доступа к микрофону!"); }
 
-            btn.classList.remove('btn-warning', 'blink');
+            } else {
 
-            isRecording = false;
+                mediaRecorder.stop();
 
-        }
+                btn.classList.add('btn-danger');
+
+                btn.classList.remove('btn-warning', 'blink');
+
+                isRecording = false;
+
+            }
+
+        });
 
     });
 
-});
+}
+
+initRecordButtons(document);
+
 
 function votePoll(pollId, optionIndex) {
 
@@ -2767,7 +2784,11 @@ function votePoll(pollId, optionIndex) {
 
             <a class="text-secondary" href="#" onclick="editPost({{ post.id }});return false;"><i class="bi bi-pencil"></i></a>
 
-            <a class="text-danger" href="{{ url_for('delete_post', post_id=post.id) }}"><i class="bi bi-trash"></i></a>
+            <form method="POST" action="{{ url_for('delete_post', post_id=post.id) }}" style="display:inline;" onsubmit="return confirm('Удалить пост?')">
+
+                <button type="submit" class="btn p-0 text-danger"><i class="bi bi-trash"></i></button>
+
+            </form>
 
         </div>
 
@@ -6804,6 +6825,8 @@ async function newChat() {
 
 async function loadChat(chatId, el) {
   currentChatId = chatId;
+  isWaiting = false;
+  document.getElementById('aiSendBtn').disabled = false;
   document.querySelectorAll('.ai-chat-item').forEach(i => i.classList.remove('active'));
   if (el) el.classList.add('active');
   document.getElementById('deleteChatBtn').style.display = 'inline-block';
@@ -6946,20 +6969,16 @@ async function aiSendMessage() {
       const data = await res.json();
       startAiCooldown(data.retry_after || AI_COOLDOWN_SECONDS);
       alert(data.error || 'Подожди немного!');
-      isWaiting = false;
-      document.getElementById('aiSendBtn').disabled = false;
       return;
     }
     if (res.status === 402) {
       const data = await res.json();
       alert(data.error || 'Недостаточно кредитов!');
       updateCredits(data.credits);
-      isWaiting = false;
-      document.getElementById('aiSendBtn').disabled = false;
       return;
     }
     const data = await res.json();
-    if (data.error) { alert(data.error); isWaiting = false; document.getElementById('aiSendBtn').disabled = false; return; }
+    if (data.error) { alert(data.error); return; }
     appendMessage(data.user_msg);
     startAiCooldown(AI_COOLDOWN_SECONDS);
     if (data.ai_msg) appendMessage(data.ai_msg);
@@ -6977,10 +6996,11 @@ async function aiSendMessage() {
   } catch(e) {
     removeTyping();
     appendMessage({role:'assistant', content:'⏳ Попробуйте позже — нейросеть не отвечает.', timestamp:new Date().toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'})});
+  } finally {
+    isWaiting = false;
+    document.getElementById('aiSendBtn').disabled = false;
+    input.focus();
   }
-  isWaiting = false;
-  document.getElementById('aiSendBtn').disabled = false;
-  input.focus();
 }
 
 async function deleteCurrentChat() {
@@ -6995,7 +7015,7 @@ async function deleteCurrentChat() {
 }
 
 if (typeof io !== 'undefined') {
-  const sock = io();
+  const sock = window.fontanBaseSocket || io();
   sock.on('connect', () => { if(currentChatId) sock.emit('join_ai_chat', {chat_id: currentChatId}); });
   sock.on('ai_message', (data) => {
     if (data.chat_id == currentChatId) {
@@ -8599,7 +8619,7 @@ def like_post(post_id):
 
     db.session.commit()
 
-    return redirect(request.referrer)
+    return redirect(request.referrer or url_for('index'))
 
 @app.route('/add_comment/<int:post_id>', methods=['POST'])
 
@@ -8659,7 +8679,7 @@ def add_comment(post_id):
 
         flash(f"⚠️ Комментарий заблокирован: {reason}", "warning")
 
-    return redirect(url_for('index'))
+    return redirect(request.referrer or url_for('index'))
 
 @app.route('/flux')
 
