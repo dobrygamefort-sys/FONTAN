@@ -10001,10 +10001,12 @@ with app.app_context():
 # --- ПРОВЕРКА ПРИ СТАРТЕ, СОЗДАНИЕ АДМИНА И ЗАПУСК ---
 with app.app_context():
     try:
-        print(f">>> [FONTAN] ПРОВЕРКА ПУЛЕРА: {PROJECT_ID}")
+        # Убрали PROJECT_ID, так как мы на Railway
+        print(">>> [FONTAN] ПРОВЕРКА ПОДКЛЮЧЕНИЯ К БАЗЕ...")
         db.session.execute(text('SELECT 1'))
         db.session.commit()
         
+        # Создаем таблицы (если их нет)
         db.create_all() 
         
         # Проверка админа
@@ -10027,10 +10029,10 @@ with app.app_context():
             print(">>> [FONTAN] Админ найден.")
             
     except Exception as e:
-        print(f">>> [FONTAN] ОШИБКА: {e}")
-        try: db.session.rollback()
-        except: pass
+        print(f">>> [FONTAN] ОШИБКА ИНИЦИАЛИЗАЦИИ: {e}")
+        # Если видишь ошибку про "column type", значит нужно сбросить таблицу Notifications
+        db.session.rollback()
 
 if __name__ == '__main__':
-    # Этот запуск критичен для Render!
+    # На Railway порт подхватится автоматически
     socketio.run(app, host='0.0.0.0', port=port)
