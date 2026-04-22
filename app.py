@@ -136,49 +136,42 @@ from flask_socketio import SocketIO
 from flask_login import LoginManager
 import cloudinary
 
-# --- 1. ПОРТ И ОКРУЖЕНИЕ ---
+# --- 1. ПОРТ ---
 port = int(os.environ.get("PORT", 10000))
 
-# --- 2. КОНФИГУРАЦИЯ БАЗЫ ДАННЫХ (SUPABASE POOLER FIX) ---
-# Используем порт 6543, так как прямой 5432 на Render выдает "Network is unreachable"
+# --- 2. КОНФИГУРАЦИЯ БАЗЫ (THE CORRECT WAY) ---
 PROJECT_ID = "apbtrkzzvnpogpttgbpg"
 DB_PASS = "fontan20261"
-# Для порта 6543 ОБЯЗАТЕЛЬНО использовать формат логина postgres.[PROJECT_ID]
 DB_USER = f"postgres.{PROJECT_ID}"
 DB_HOST = "aws-0-eu-central-1.pooler.supabase.com"
 DB_NAME = "postgres"
 
-# Кодируем пароль для безопасности URI
 encoded_pass = urllib.parse.quote_plus(DB_PASS)
 
-# СТРОКА ПОДКЛЮЧЕНИЯ:
-# prepared_statements=false КРИТИЧЕСКИ ВАЖНО для Transaction Mode пулера
-fixed_uri = (
-    f"postgresql://{DB_USER}:{encoded_pass}@{DB_HOST}:6543/{DB_NAME}"
-    f"?sslmode=require&prepared_statements=false"
-)
+# Чистый URI без лишних параметров в строке
+fixed_uri = f"postgresql://{DB_USER}:{encoded_pass}@{DB_HOST}:6543/{DB_NAME}?sslmode=require"
 
 app.config['SQLALCHEMY_DATABASE_URI'] = fixed_uri
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-    "poolclass": NullPool,  # Отключаем пул на стороне Flask, доверяем пулеру Supabase
+    "poolclass": NullPool,
     "connect_args": {
         "connect_timeout": 30,
-        "application_name": "fontan_app"
+        "application_name": "fontan_app",
+        # ПЕРЕДАЕМ ПАРАМЕТР ЗДЕСЬ, А НЕ В URI:
+        "options": "-c prepared_statements=off" 
     }
 }
 
-# --- 3. ИНИЦИАЛИЗАЦИЯ СЕРВИСОВ ---
+# --- 3. ИНИЦИАЛИЗАЦИЯ ---
 db.init_app(app)
-
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 
-# SocketIO с поддержкой gevent для Render
 socketio = SocketIO(app, async_mode='gevent', cors_allowed_origins="*")
 
-# --- 4. CLOUDINARY CONFIG ---
+# --- 4. CLOUDINARY ---
 cloudinary.config(
     cloud_name='daz4839e7', 
     api_key='371541773313745', 
@@ -186,28 +179,17 @@ cloudinary.config(
     secure=True
 )
 
-# --- 5. ПРОВЕРКА ПОДКЛЮЧЕНИЯ ПРИ ЗАПУСКЕ ---
+# --- 5. ПРОВЕРКА ---
 with app.app_context():
     try:
-        print(f">>> [FONTAN] ПОПЫТКА ПОДКЛЮЧЕНИЯ К ПУЛЕРУ: {DB_HOST}")
-        # Выполняем тестовый запрос
+        print(f">>> [FONTAN] ПОДКЛЮЧЕНИЕ ЧЕРЕЗ ПУЛЕР (6543): {PROJECT_ID}")
         db.session.execute(text('SELECT 1'))
         db.session.commit()
-        print(">>> [FONTAN] SUCCESS: База данных авторизована и отвечает!")
-        
-        # Создаем таблицы, если их нет
+        print(">>> [FONTAN] SUCCESS: База данных (Пулер) отвечает!")
         db.create_all()
-        print(">>> [FONTAN] База данных проверена, таблицы готовы.")
-        
     except Exception as e:
-        if 'db' in globals():
-            db.session.rollback()
-        print(f">>> [FONTAN] КРИТИЧЕСКАЯ ОШИБКА БАЗЫ: {str(e)}")
-        print(">>> СОВЕТ: Проверь, что в Supabase Settings -> Database включен Connection Pooling (Transaction mode).")
-# --- ЗАПУСК (В САМОМ КОНЦЕ ФАЙЛА) ---
-# if __name__ == '__main__':
-#     socketio.run(app, host='0.0.0.0', port=port)
-# --- Р’РЎРџРћРњРћР“РђРўР•Р›Р¬РќР«Р• Р¤РЈРќРљР¦РР ---
+        if 'db' in globals(): db.session.rollback()
+        print(f">>> [FONTAN] ОШИБКА БАЗЫ: {str(e)}")
 
 def send_verification_code(email):
 
