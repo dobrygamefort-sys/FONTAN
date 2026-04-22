@@ -130,46 +130,48 @@ WEBRTC_ICE_SERVERS = [
 # Найти свой URL: Supabase → Project Settings → Database → Transaction pooler
 import os
 from sqlalchemy import text
+from sqlalchemy.pool import NullPool
+from flask import Flask
+from flask_sqlalchemy import SQLAlchemy
 from flask_socketio import SocketIO
 from flask_login import LoginManager
 import cloudinary
 
-# --- 1. ПОРТ (Railway ставит его сам) ---
-import os
-from sqlalchemy import text
-from flask_socketio import SocketIO
-from flask_login import LoginManager
-import cloudinary
+app = Flask(__name__)
+db = SQLAlchemy()
 
-# --- ПОРТ ---
+# --- 1. ПОРТ ---
 port = int(os.environ.get("PORT", 8080))
 
-# --- КОНФИГУРАЦИЯ БАЗЫ ---
+# --- 2. КОНФИГУРАЦИЯ БАЗЫ ---
+# Берем DATABASE_URL из настроек Railway (External Connection String)
 db_url = os.environ.get("DATABASE_URL")
 
 if db_url:
-    # Фикс для SQLAlchemy (postgres:// -> postgresql://)
+    # Фикс для SQLAlchemy (обязательно postgresql://)
     if db_url.startswith("postgres://"):
         db_url = db_url.replace("postgres://", "postgresql://", 1)
 else:
-    print(">>> [FONTAN] ВНИМАНИЕ: DATABASE_URL не найдена!")
+    print(">>> [FONTAN] КРИТИЧЕСКАЯ ОШИБКА: DATABASE_URL не задана в переменных!")
 
 app.config['SQLALCHEMY_DATABASE_URI'] = db_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-    "poolclass": NullPool if 'NullPool' in globals() else None,
+    "poolclass": NullPool,
     "connect_args": {"connect_timeout": 10}
 }
 
-# --- ИНИЦИАЛИЗАЦИЯ ---
+# --- 3. ИНИЦИАЛИЗАЦИЯ СЕРВИСОВ ---
 db.init_app(app)
+
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 
+# gevent важен для Railway
 socketio = SocketIO(app, async_mode='gevent', cors_allowed_origins="*")
 
-# --- CLOUDINARY ---
+# --- 4. CLOUDINARY ---
 cloudinary.config(
     cloud_name='daz4839e7', 
     api_key='371541773313745', 
@@ -177,21 +179,22 @@ cloudinary.config(
     secure=True
 )
 
-# --- ЧИСТАЯ ПРОВЕРКА ПРИ СТАРТЕ ---
+# --- 5. ПРОВЕРКА И ЗАПУСК ---
 with app.app_context():
     try:
-        print(">>> [FONTAN] ПРОВЕРКА ПОДКЛЮЧЕНИЯ К БАЗЕ...")
+        print(">>> [FONTAN] ЗАПУСК ПРОВЕРКИ БАЗЫ ДАННЫХ...")
         if not db_url:
-            raise ValueError("DATABASE_URL is missing!")
+            raise ValueError("DATABASE_URL IS EMPTY")
             
         db.session.execute(text('SELECT 1'))
         db.session.commit()
-        print(">>> [FONTAN] SUCCESS: База данных отвечает!")
+        print(">>> [FONTAN] SUCCESS: База данных подключена успешно!")
         db.create_all()
     except Exception as e:
-        if 'db' in globals(): db.session.rollback()
-        # Специально выводим текст ошибки, чтобы понять, что не так
-        print(f">>> [FONTAN] ОШИБКА БАЗЫ: {str(e)}")
+        if 'db' in globals() and hasattr(db, 'session'):
+            db.session.rollback()
+        print(f">>> [FONTAN] ОШИБКА ПРИ СТАРТЕ: {str(e)}")
+        print(">>> СОВЕТ: Проверь DATABASE_URL. Используй External Connection String из настроек базы.")
 
 def send_verification_code(email):
 
