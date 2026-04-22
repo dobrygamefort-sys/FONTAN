@@ -123,23 +123,8 @@ WEBRTC_ICE_SERVERS = [
 
 ]
 
-# --- НАСТРОЙКА БАЗЫ ДАННЫХ (Supabase IPv4 Pooler) ---
-# ВАЖНО: Удали переменную DATABASE_URL на Render или замени её на Supabase pooler URL!
-# Supabase IPv4 Transaction Pooler (работает на Render free tier, нет IPv6):
-# postgresql://postgres.apbtrkzzvnpogpttgbpg:PASSWORD@aws-0-us-east-1.pooler.supabase.com:6543/postgres
-# Найти свой URL: Supabase → Project Settings → Database → Transaction pooler
-import os
-from sqlalchemy import text
-from flask import Flask, flash
-from flask_sqlalchemy import SQLAlchemy
-from flask_socketio import SocketIO
-from flask_login import LoginManager
-import cloudinary
-
-app = Flask(__name__)
-
-# --- КРИТИЧЕСКИЙ ФИКС ДЛЯ FLASH/SESSION ---
-app.config['SECRET_KEY'] = os.environ.get("SECRET_KEY", "fontan_secret_2026_key")
+# --- НАСТРОЙКА БАЗЫ ДАННЫХ ---
+# Единственная инициализация app, db, login_manager, socketio
 
 # --- КОНФИГУРАЦИЯ БАЗЫ ---
 db_url = os.environ.get("DATABASE_URL")
@@ -148,27 +133,15 @@ if db_url and db_url.startswith("postgres://"):
 
 app.config['SQLALCHEMY_DATABASE_URI'] = db_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['SECRET_KEY'] = os.environ.get("SECRET_KEY", "fontan_secret_2026_key")
 
-db = SQLAlchemy(app)
+db.init_app(app)
+login_manager.init_app(app)
+login_manager.login_view = 'login'
+login_manager.login_message = 'Пожалуйста, войдите в аккаунт.'
+login_manager.login_message_category = 'warning'
 
-# --- ИНИЦИАЛИЗАЦИЯ ОСТАЛЬНОГО ---
-login_manager = LoginManager(app)
 socketio = SocketIO(app, async_mode='gevent', cors_allowed_origins="*")
-
-# --- ПРОВЕРКА ПРИ СТАРТЕ ---
-with app.app_context():
-    try:
-        # Проверка связи
-        db.session.execute(text('SELECT 1'))
-        db.session.commit()
-        print(">>> [FONTAN] БАЗА ОК, СЕЙЧАС ПРОВЕРЮ ТАБЛИЦЫ...")
-        
-        # Попытка создать/обновить таблицы
-        db.create_all()
-        print(">>> [FONTAN] SUCCESS: Все системы в норме.")
-    except Exception as e:
-        print(f">>> [FONTAN] ОШИБКА ИНИЦИАЛИЗАЦИИ: {e}")
-        db.session.rollback()
 
 def send_verification_code(email):
 
@@ -9971,19 +9944,12 @@ with app.app_context():
 
     # ---------------------------------------------------
 
-    # Создание админа
-# --- ПРОВЕРКА ПРИ СТАРТЕ, СОЗДАНИЕ АДМИНА И ЗАПУСК ---
-with app.app_context():
+    # --- СОЗДАНИЕ АДМИНА ---
     try:
-        # Убрали PROJECT_ID, так как мы на Railway
         print(">>> [FONTAN] ПРОВЕРКА ПОДКЛЮЧЕНИЯ К БАЗЕ...")
         db.session.execute(text('SELECT 1'))
         db.session.commit()
-        
-        # Создаем таблицы (если их нет)
-        db.create_all() 
-        
-        # Проверка админа
+
         admin = User.query.filter_by(username='admin').first()
         if not admin:
             print(">>> [FONTAN] Создаю админа...")
@@ -10001,10 +9967,9 @@ with app.app_context():
             print(">>> [FONTAN] Админ готов!")
         else:
             print(">>> [FONTAN] Админ найден.")
-            
+
     except Exception as e:
         print(f">>> [FONTAN] ОШИБКА ИНИЦИАЛИЗАЦИИ: {e}")
-        # Если видишь ошибку про "column type", значит нужно сбросить таблицу Notifications
         db.session.rollback()
 
 
