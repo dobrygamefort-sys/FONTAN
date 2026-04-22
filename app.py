@@ -130,71 +130,45 @@ WEBRTC_ICE_SERVERS = [
 # Найти свой URL: Supabase → Project Settings → Database → Transaction pooler
 import os
 from sqlalchemy import text
-from sqlalchemy.pool import NullPool
-from flask import Flask
+from flask import Flask, flash
 from flask_sqlalchemy import SQLAlchemy
 from flask_socketio import SocketIO
 from flask_login import LoginManager
 import cloudinary
 
 app = Flask(__name__)
-db = SQLAlchemy()
 
-# --- 1. ПОРТ ---
-port = int(os.environ.get("PORT", 8080))
+# --- КРИТИЧЕСКИЙ ФИКС ДЛЯ FLASH/SESSION ---
+app.config['SECRET_KEY'] = os.environ.get("SECRET_KEY", "fontan_secret_2026_key")
 
-# --- 2. КОНФИГУРАЦИЯ БАЗЫ ---
-# Берем DATABASE_URL из настроек Railway (External Connection String)
+# --- КОНФИГУРАЦИЯ БАЗЫ ---
 db_url = os.environ.get("DATABASE_URL")
-
-if db_url:
-    # Фикс для SQLAlchemy (обязательно postgresql://)
-    if db_url.startswith("postgres://"):
-        db_url = db_url.replace("postgres://", "postgresql://", 1)
-else:
-    print(">>> [FONTAN] КРИТИЧЕСКАЯ ОШИБКА: DATABASE_URL не задана в переменных!")
+if db_url and db_url.startswith("postgres://"):
+    db_url = db_url.replace("postgres://", "postgresql://", 1)
 
 app.config['SQLALCHEMY_DATABASE_URI'] = db_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-    "poolclass": NullPool,
-    "connect_args": {"connect_timeout": 10}
-}
 
-# --- 3. ИНИЦИАЛИЗАЦИЯ СЕРВИСОВ ---
-db.init_app(app)
+db = SQLAlchemy(app)
 
-login_manager = LoginManager()
-login_manager.init_app(app)
-login_manager.login_view = 'login'
-
-# gevent важен для Railway
+# --- ИНИЦИАЛИЗАЦИЯ ОСТАЛЬНОГО ---
+login_manager = LoginManager(app)
 socketio = SocketIO(app, async_mode='gevent', cors_allowed_origins="*")
 
-# --- 4. CLOUDINARY ---
-cloudinary.config(
-    cloud_name='daz4839e7', 
-    api_key='371541773313745', 
-    api_secret='fumEMY1h-nsFKW8B5BCgix9EN-8',
-    secure=True
-)
-
-# --- 5. ПРОВЕРКА И ЗАПУСК ---
+# --- ПРОВЕРКА ПРИ СТАРТЕ ---
 with app.app_context():
     try:
-        print(">>> [FONTAN] ЗАПУСК ПРОВЕРКИ БАЗЫ ДАННЫХ...")
-        if not db_url:
-            raise ValueError("DATABASE_URL IS EMPTY")
-            
+        # Проверка связи
         db.session.execute(text('SELECT 1'))
         db.session.commit()
-        print(">>> [FONTAN] SUCCESS: База данных подключена успешно!")
+        print(">>> [FONTAN] БАЗА ОК, СЕЙЧАС ПРОВЕРЮ ТАБЛИЦЫ...")
+        
+        # Попытка создать/обновить таблицы
         db.create_all()
+        print(">>> [FONTAN] SUCCESS: Все системы в норме.")
     except Exception as e:
-        if 'db' in globals() and hasattr(db, 'session'):
-            db.session.rollback()
-        print(f">>> [FONTAN] ОШИБКА ПРИ СТАРТЕ: {str(e)}")
-        print(">>> СОВЕТ: Проверь DATABASE_URL. Используй External Connection String из настроек базы.")
+        print(f">>> [FONTAN] ОШИБКА ИНИЦИАЛИЗАЦИИ: {e}")
+        db.session.rollback()
 
 def send_verification_code(email):
 
@@ -10033,6 +10007,7 @@ with app.app_context():
         # Если видишь ошибку про "column type", значит нужно сбросить таблицу Notifications
         db.session.rollback()
 
+
 if __name__ == '__main__':
-    # На Railway порт подхватится автоматически
+    port = int(os.environ.get("PORT", 8080))
     socketio.run(app, host='0.0.0.0', port=port)
